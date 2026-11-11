@@ -4764,7 +4764,7 @@ func newRemoteMux() *http.ServeMux {
 	mux.HandleFunc("POST /api/input/button/play", requireAuth(handleInputButton(hardware.PlayButton)))
 
 	// htmax.min.js (htmx 4.0 plus its bundled extensions) is vendored at
-	// install time (pinned to 4.0.0) rather than referencing an
+	// install time (pinned to 4.0.1) rather than referencing an
 	// external CDN at runtime - this device shouldn't depend on internet
 	// access, only its own LAN, to serve its control page. Embedded so the
 	// page works no matter what directory the binary runs from (the old

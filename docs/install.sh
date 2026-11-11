@@ -34,7 +34,7 @@ GO_VERSION="1.27.1"
 GO_SHA256_ARM64="3450b45a3f9ee8568792736a5c5e70a1f2e9b36c35a8f74958c03e51d7d92bec"
 # Web assets served by the app (not in git), with their checksums.
 WEB_ASSETS=(
-  "htmax.min.js|https://unpkg.com/htmx.org@4.0.0/dist/htmax.min.js|2b90cb1844656b9f025805b479288cea2877c7f91068a845c4106ebf5d87a315"
+  "htmax.min.js|https://unpkg.com/htmx.org@4.0.1/dist/htmax.min.js|a262eab3dc3da7353552239b52b9a33397ea62b0eb36c65cd0e709fcd85ccc35"
   "uPlot.iife.min.js|https://unpkg.com/uplot@1.6.32/dist/uPlot.iife.min.js|19c8d4c6ad88929a79f4ae49d6f7161566dfd0ba3d15cc495e974f787eb78f1f"
   "uPlot.min.css|https://unpkg.com/uplot@1.6.32/dist/uPlot.min.css|df630c6a8d6f8eeaff264b50f73ce5b114f646ffd9a0bb74f049b0a00135fa04"
 )
