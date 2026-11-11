@@ -3769,7 +3769,9 @@ func recordingFilesKey() (string, bool) {
 		return "", false
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "%d;", top.ModTime().UnixNano())
+	// Path in the key: tests (and any future runtime change) can point
+	// RecordPath at a different dir whose mtimes collide with the old one.
+	fmt.Fprintf(&b, "%s;%d;", RecordPath, top.ModTime().UnixNano())
 	entries, err := os.ReadDir(RecordPath)
 	if err != nil {
 		return "", false
