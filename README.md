@@ -375,7 +375,8 @@ PI9696_SIM=1 ./pi9696    # full app without SPI/GPIO; token printed to stderr
 ### Repository layout
 
 ```
-main.go           state machine, menus, recording/playback, inferno lifecycle
+main.go           state machine, menu actions, recording/playback, inferno lifecycle
+display.go        OLED render loop, screens and menu pages
 remote.go         web server: auth, dashboard, settings, downloads, meter push
 web/dashboard.html  the dashboard page template (HTML/CSS/JS, embedded)
 txholder.go       the in-process inferno instance (capture → FIFO, TX holder) + pump
