@@ -25,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -3039,6 +3040,16 @@ func renderRecordingsHTML() (string, error) {
 
 func renderRecordingsHTMLLimit(limit int) (string, error) {
 	files := recordingFiles()
+	// Oldest first by each take's start time from its name, so the cap keeps
+	// the newest: glob order is by filename, where the prefix sorts ahead of
+	// the time. Unparsable names sort first; ties keep their glob order.
+	start := make(map[string]string, len(files))
+	for _, f := range files {
+		if m := recFilenameRe.FindStringSubmatch(filepath.Base(f)); m != nil {
+			start[f] = m[2] + m[3]
+		}
+	}
+	slices.SortStableFunc(files, func(a, b string) int { return strings.Compare(start[a], start[b]) })
 	view := recordingsView{Total: len(files), Sprite: iconSpriteHref(currentTheme())}
 	if limit > 0 && len(files) > limit {
 		files = files[len(files)-limit:]

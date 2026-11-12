@@ -4878,6 +4878,27 @@ func TestPanelSkipsRecordingsRenderWhenSetUnchanged(t *testing.T) {
 	}
 }
 
+// The pushed list keeps the newest takes by start time. Sorted by filename,
+// a later take with an earlier-sorting prefix fell off the capped list.
+func TestRecordingsCapKeepsNewestAcrossPrefixes(t *testing.T) {
+	initTestHardware(t)
+	newer := filepath.Join(RecordPath, "Alpha_20991231_110000_ch2_48kHz.wav")
+	older := filepath.Join(RecordPath, "Zulu_20991231_100000_ch2_48kHz.wav")
+	for _, f := range []string{newer, older} {
+		if err := os.WriteFile(f, nil, 0644); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.Remove(f) })
+	}
+	got, err := renderRecordingsHTMLLimit(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "Alpha_20991231_110000") || strings.Contains(got, "Zulu_20991231_100000") {
+		t.Errorf("capped list did not keep the newest take:\n%s", got)
+	}
+}
+
 // A take being written grows its file without touching any directory mtime,
 // so the take-set fingerprint alone froze the live row's duration. While a
 // take is live the panel must re-render every push, and once more after it
