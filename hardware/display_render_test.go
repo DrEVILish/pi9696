@@ -80,7 +80,7 @@ func TestOverWhiteFastCasesMatchTable(t *testing.T) {
 	}
 }
 
-// SetPixel and FillBox write Pix directly now; they must match the old
+// The box and bar fills write Pix directly now; they must match the old
 // draw.Draw-of-a-Uniform result and set the same panel nibbles.
 func TestFillPathsMatchReference(t *testing.T) {
 	d := newTestDisplay(t, 11)
@@ -96,7 +96,6 @@ func TestFillPathsMatchReference(t *testing.T) {
 	d.FillBox(250, 60, 20, 20, 9) // clipped at the corner
 	d.FillBox(-5, -5, 12, 3, 4)   // clipped at the origin
 	d.DrawBox(30, 30, 40, 10, 12)
-	d.SetPixel(-1, 3, 15)
 	d.DrawProgressBar(200, 2, 0, 3, 0.5) // zero width still draws both side borders
 	d.DrawBox(5, 50, 7, 0, 3)            // zero height draws nothing
 	d.DrawBox(5, 52, 7, 1, 6)            // one row

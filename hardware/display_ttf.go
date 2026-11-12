@@ -351,22 +351,6 @@ func (d *TTFDisplay) setNibble(x, y int, brightness byte) {
 	}
 }
 
-func (d *TTFDisplay) SetPixel(x, y int, brightness byte) {
-	if x < 0 || x >= DisplayWidth || y < 0 || y >= DisplayHeight {
-		return
-	}
-
-	// Fill the corresponding renderScale x renderScale block on the
-	// supersampled canvas so shapes drawn via SetPixel (progress bars,
-	// boxes) stay consistent with text if EncodePNG ever samples a region
-	// that overlaps both - solid fills have no antialiasing to gain from
-	// supersampling, but this keeps the canvas from having stale/blank data
-	// under whatever SetPixel just drew.
-	d.noteDraw('p', "", x, y, int(brightness))
-	d.fillCanvas(image.Rect(x*renderScale, y*renderScale, (x+1)*renderScale, (y+1)*renderScale), brightness*17) // 0-15 to 0-255
-	d.setNibble(x, y, brightness)
-}
-
 func (d *TTFDisplay) DrawText(x, y int, text string) {
 	// x, y and bounds are all logical (256x64) coordinates - getTextBounds
 	// already divides the scaled font's measurements back down (see
@@ -587,7 +571,7 @@ func (d *TTFDisplay) dumpSimFrame() error {
 	// Decode from d.buffer, not d.canvas: real hardware only ever receives
 	// the 4-bit packed buffer via Update(), so dumping the canvas directly
 	// would only prove the text/shape drawing is correct and silently miss
-	// a bug in the SetPixel/canvasToBufferRect nibble-packing path.
+	// a bug in the setNibble/canvasToBufferRect nibble-packing path.
 	return png.Encode(f, d.bufferToImage())
 }
 
