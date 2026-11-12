@@ -501,3 +501,29 @@ func TestLTCRunStartOutOfSilence(t *testing.T) {
 		}
 	}
 }
+
+// Recording timecode as audio writes one more channel, so the disk-time
+// estimate must count it: before a take from the setting, during one from
+// whether the switch actually happened.
+func TestRecordingBytesPerSecondCountsTimecodeChannel(t *testing.T) {
+	initTestHardware(t)
+	setTimecodeSettings(t, tcSourceOff, tcRecordMeta, false)
+	mutex.Lock()
+	perCh := float64(sampleRates[sampleRateIdx] * OutputBitsPerSample / 8)
+	meta := recordingBytesPerSecond()
+	mutex.Unlock()
+
+	setTimecodeSettings(t, tcSourceOff, tcRecordAudio, false)
+	mutex.Lock()
+	defer mutex.Unlock()
+	if got := recordingBytesPerSecond(); got != meta+perCh {
+		t.Errorf("timecode-as-audio setting: %v B/s, want %v", got, meta+perCh)
+	}
+	// A live take whose input never switched records no extra channel.
+	origRec := isRecording
+	isRecording = true
+	defer func() { isRecording = origRec }()
+	if got := recordingBytesPerSecond(); got != meta {
+		t.Errorf("live take without the switch: %v B/s, want %v", got, meta)
+	}
+}

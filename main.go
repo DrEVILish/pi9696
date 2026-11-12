@@ -4998,9 +4998,15 @@ func shouldAutoStopTake(remaining time.Duration) bool {
 
 // recordingBytesPerSecond estimates on-disk output rate. WAV is uncompressed
 // PCM, so it's derived exactly from the raw PCM rate.
+// Recording timecode as audio adds the TIMECODE channel to the take: exact
+// while a take is live (tcAudioTake), the setting otherwise (the next take).
 func recordingBytesPerSecond() float64 {
 	sampleRate := sampleRates[sampleRateIdx]
-	return float64(sampleRate * channelCount * OutputBitsPerSample / 8)
+	channels := channelCount
+	if tcAudioTake || (!isRecording && tcRecordIdx == tcRecordAudio) {
+		channels++
+	}
+	return float64(sampleRate * channels * OutputBitsPerSample / 8)
 }
 
 func getRemainingStorage() string {
