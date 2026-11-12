@@ -3204,8 +3204,7 @@ func writeRecordingZip(dst io.Writer, base string, files []string) (err error) {
 		}
 		// PCM WAV is incompressible noise to Deflate: Store skips the
 		// CPU burn and streams multi-GB takes at disk speed instead.
-		hdr := &zip.FileHeader{Name: entry, Method: zip.Store}
-		hdr.SetModTime(info.ModTime())
+		hdr := &zip.FileHeader{Name: entry, Method: zip.Store, Modified: info.ModTime()}
 		wc, err := zw.CreateHeader(hdr)
 		if err != nil {
 			in.Close()
@@ -3232,8 +3231,7 @@ func writeRecordingZip(dst io.Writer, base string, files []string) (err error) {
 			fmt.Fprintf(&manifest, "    ch%-3d %s%s\n", c.Number, c.Name, src)
 		}
 		if side, err := os.ReadFile(channelsSidecar(f)); err == nil {
-			hdr := &zip.FileHeader{Name: strings.TrimSuffix(entry, filepath.Ext(entry)) + ".channels.json", Method: zip.Deflate}
-			hdr.SetModTime(info.ModTime())
+			hdr := &zip.FileHeader{Name: strings.TrimSuffix(entry, filepath.Ext(entry)) + ".channels.json", Method: zip.Deflate, Modified: info.ModTime()}
 			if w, err := zw.CreateHeader(hdr); err == nil {
 				w.Write(side)
 			}
