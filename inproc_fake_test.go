@@ -169,6 +169,9 @@ func TestMeterWindowsPublishImmediately(t *testing.T) {
 	if !strings.Contains(meterFilterChain(48000), "ametadata=print:file=-:direct=1") {
 		t.Fatalf("meter filter prints buffered: %s", meterFilterChain(48000))
 	}
+	// A leftover reaper resuming the monitor bumps meterGen, and this
+	// reader's windows would then be dropped as stale.
+	quiesceTransport(t)
 	mutex.Lock()
 	gen := meterGen
 	origPeak, origCh := meterPeakDB, meterChannelPeak

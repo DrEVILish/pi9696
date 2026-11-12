@@ -494,6 +494,13 @@ func TestStopRecordingDoesNotBlockMutex(t *testing.T) {
 // clean idle start (the test env has no real disk, so lowDisk() is false -
 // zero free space is deliberately not treated as low).
 func TestStartRecordingGuarded(t *testing.T) {
+	// Production callers hold the app mutex; calling it bare raced with
+	// the reaper of the monitor a take resumes.
+	guarded := func() bool {
+		mutex.Lock()
+		defer mutex.Unlock()
+		return startRecordingGuarded()
+	}
 	origState, origRec, origInferno := currentState, isRecording, infernoState
 	t.Cleanup(func() { currentState, isRecording, infernoState = origState, origRec, origInferno })
 
@@ -507,7 +514,7 @@ func TestStartRecordingGuarded(t *testing.T) {
 	currentState = StateIdle
 	isRecording = true
 	mutex.Unlock()
-	if startRecordingGuarded() {
+	if guarded() {
 		mutex.Lock()
 		got := isRecording
 		mutex.Unlock()
@@ -519,7 +526,7 @@ func TestStartRecordingGuarded(t *testing.T) {
 	currentState = StateSettings
 	isRecording = false
 	mutex.Unlock()
-	if startRecordingGuarded() {
+	if guarded() {
 		t.Fatalf("expected guarded start to refuse from StateSettings")
 	}
 
@@ -530,7 +537,7 @@ func TestStartRecordingGuarded(t *testing.T) {
 	isRecording = false
 	sysNotice = ""
 	mutex.Unlock()
-	if startRecordingGuarded() {
+	if guarded() {
 		t.Fatalf("expected guarded start to refuse while Inferno is stopped")
 	}
 	mutex.Lock()
@@ -558,7 +565,7 @@ func TestStartRecordingGuarded(t *testing.T) {
 		fifoPath, lastSampleRate, lastChannelCount = origFifo, origRate, origCh
 		mutex.Unlock()
 	})
-	if !startRecordingGuarded() {
+	if !guarded() {
 		t.Fatalf("expected guarded start to succeed from idle")
 	}
 
@@ -2775,19 +2782,52 @@ func TestConfigImportMissingFileFailsCleanly(t *testing.T) {
 // an earlier test (e.g. a lingering ffmpeg process). It waits for
 // the monitoring flag to become false, then clears the flag so
 // subsequent tests start with a clean slate.
-func ensureMonitorDown(t *testing.T) {
+// quiesceTransport ends a take or monitor an earlier test left running and
+// waits out their reapers, which otherwise rewrite take, monitor and meter
+// state (takeLive, meterGen, the meter slices) under the next test.
+func quiesceTransport(t *testing.T) {
 	t.Helper()
 	mutex.Lock()
-	mon := monitoring
+	rec, done := isRecording, recordingDone
+	if rec {
+		stopRecording()
+	}
+	mutex.Unlock()
+	if rec && done != nil {
+		select {
+		case <-done:
+		case <-time.After(ffmpegStopGrace + 5*time.Second):
+			t.Fatal("an earlier take did not end")
+		}
+	}
+	ensureMonitorDown(t) // the take's reaper may have resumed it
+}
+
+func ensureMonitorDown(t *testing.T) {
+	t.Helper()
+	// Stop and wait: only clearing the flag left the monitor's ffmpeg and
+	// reaper running into later tests, where the reaper rewrote monitor and
+	// meter state and the ffmpeg wrote into removed temp dirs.
+	mutex.Lock()
+	mon, done := monitoring, monitorDone
+	if mon {
+		stopMonitor()
+	}
 	mutex.Unlock()
 	if !mon {
 		return
 	}
-	if time.Now().After(time.Now().Add(3 * time.Second)) {
-		t.Fatalf("pre-existing monitor would not stop – leaked monitor detected")
+	if done != nil {
+		select {
+		case <-done:
+		case <-time.After(ffmpegStopGrace + 5*time.Second):
+			t.Fatal("leaked monitor would not stop")
+		}
 	}
+	// Disown, as startRecording does: the reaper only clears state while
+	// monitorCmd is still its own process.
 	mutex.Lock()
-	monitoring = false
+	monitorCmd, monitoring = nil, false
 	mutex.Unlock()
 }
 
@@ -2802,8 +2842,10 @@ func TestInfernoUpGateAndAudioPath(t *testing.T) {
 	setDemoMode(true)
 	resetTransportCleanup(t)
 	ensureMonitorDown(t)
-	startMonitor()
+	// Under the mutex like every production caller: a reaper left by an
+	// earlier take writes the monitor state under it.
 	mutex.Lock()
+	startMonitor()
 	startRecording()
 	rec, take := isRecording, recordingFile
 	mutex.Unlock()
@@ -2834,8 +2876,10 @@ func TestDemoGeneratorPCM(t *testing.T) {
 	setDemoMode(true)
 	resetTransportCleanup(t)
 	ensureMonitorDown(t)
-	startMonitor()
+	// Under the mutex like every production caller: a reaper left by an
+	// earlier take writes the monitor state under it.
 	mutex.Lock()
+	startMonitor()
 	startRecording()
 	rec, take := isRecording, recordingFile
 	mutex.Unlock()
@@ -2962,8 +3006,10 @@ func TestDemoRecordTake(t *testing.T) {
 	setDemoMode(true)
 	resetTransportCleanup(t)
 	ensureMonitorDown(t)
-	startMonitor()
+	// Under the mutex like every production caller: a reaper left by an
+	// earlier take writes the monitor state under it.
 	mutex.Lock()
+	startMonitor()
 	startRecording()
 	rec, take := isRecording, recordingFile
 	mutex.Unlock()
@@ -4917,6 +4963,9 @@ func TestPanelRendersLiveTakeEveryPush(t *testing.T) {
 	lastPanelRecs, lastPanelRecsKey, lastPanelConfig = "", "", ""
 	teleWSMu.Unlock()
 
+	// A take an earlier test left running would flip takeLive off mid-test.
+	quiesceTransport(t)
+
 	take := filepath.Join(RecordPath, "live_20260101_120000_ch2_48kHz.wav")
 	t.Cleanup(func() { os.Remove(take) })
 	const secBytes = 2 * 3 * 48000 // 2 ch, 24-bit, 48 kHz
@@ -4944,7 +4993,8 @@ func TestPanelRendersLiveTakeEveryPush(t *testing.T) {
 	one := push()
 	grow(2)
 	if two := push(); two == one {
-		t.Fatal("live take's row did not re-render as the file grew")
+		t.Fatalf("live take's row did not re-render as the file grew (row listed: %v, takeLive: %v, takes: %d)",
+			strings.Contains(one, filepath.Base(take)), takeLive.Load(), len(recordingFiles()))
 	}
 	takeLive.Store(false)
 	grow(3)
@@ -6301,6 +6351,10 @@ func TestRecordRefusedWhileInfernoRestartPending(t *testing.T) {
 	argsFile := filepath.Join(t.TempDir(), "args")
 	t.Setenv("FAKE_FFMPEG_ARGS", argsFile)
 	fakeExecutable(t, "ffmpeg", fakeFfmpegArgsScript)
+	// The take's reaper resumes the input monitor, whose fake ffmpeg writes
+	// argsFile: stop it before the temp dirs are removed (cleanups run
+	// last-registered first).
+	t.Cleanup(func() { ensureMonitorDown(t) })
 
 	mutex.Lock()
 	origState, origFifo, origCur, origDemo := infernoState, fifoPath, currentState, demoMode
