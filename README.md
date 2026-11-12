@@ -377,6 +377,7 @@ PI9696_SIM=1 ./pi9696    # full app without SPI/GPIO; token printed to stderr
 ```
 main.go           state machine, menus, recording/playback, inferno lifecycle
 remote.go         web server: auth, dashboard, settings, downloads, meter push
+web/dashboard.html  the dashboard page template (HTML/CSS/JS, embedded)
 txholder.go       the in-process inferno instance (capture → FIFO, TX holder) + pump
 clocksync.go      statime observation poller (the recording clock gate)
 channelnames.go   per-take channel names; channellabels.go: the unit's labels
@@ -396,7 +397,8 @@ test/             gotest.sh, ui/ (Playwright), interop/ (two-host checks)
 third_party/      ftl-themes (submodule)
 ```
 
-Not tracked (created by the installer): `inferno/`, `statime/`, `web/` assets,
+Not tracked (created by the installer): `inferno/`, `statime/`, the vendored
+`web/` assets (`dashboard.html` is tracked),
 `fonts/`, `.env`, the binary.
 
 ---

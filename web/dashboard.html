@@ -1,0 +1,1436 @@
+<!DOCTYPE html>
+{{.HTMLTag}}<head><title>{{.DeviceName}} Remote</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icon.svg">
+<!-- Core is always linked (reset + shared components, plus the baseline
+   token set); the active theme bundle on top supplies the palette. Both
+   links precede the app <style>: the app stylesheet loads after the theme
+   so its equal-specificity rules (e.g. the modal backdrop's closed
+   display:none) win the cascade. -->
+<link rel="stylesheet" href="/static/themes/core.css?v={{.CoreVersion}}">
+<link id="themecss" rel="stylesheet" href="{{.ThemeCSS}}">
+<meta name="theme-color" content="#00d9ff">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<!-- Settle off: htmx 4.0's settle step copies the outgoing element's
+     attributes onto the incoming one (setting the live value too), refocuses
+     it, then applies the real attributes - which a focused, now-dirty input
+     ignores. A text/number field saved with Enter showed its OLD value while
+     the server (and the main window) had the new one. Nothing here uses
+     settle transitions. -->
+<meta name="htmx-config" content='{"defaultSettleDelay":0}'>
+<script src="/static/htmax.min.js"></script>
+<link rel="stylesheet" href="/static/uPlot.min.css">
+<script src="/static/uPlot.iife.min.js"></script>
+<style>
+/* The only custom properties the app declares are the meter's geometry and
+   its green/yellow/red bands, which ftl-themes' .meter-fill consumes; every
+   other colour comes straight from the library. Since v4 removed the ftl-
+   prefix, declaring --text/--border here would shadow the theme and
+   declaring --accent/--surface/--muted/--danger/--success/--warning would
+   do the same - the old --glow/--panel/--dim/--rec/--idle/--orange bridge
+   is deliberately gone. See TestDefaultThemeIsFTL. */
+:root{--meter-low:var(--success,#0aff9d);--meter-mid:var(--warning,#ffe400);--meter-high:var(--danger,#ff2a2a)}
+*{box-sizing:border-box}
+body{font-family:"Consolas",monospace;background:radial-gradient(ellipse at top,var(--surface,#0a1a2e),var(--bg,#020509) 70%);background-attachment:fixed;color:var(--text);margin:0;padding:0 1.5em 4em}
+h2{font-size:0.8em;letter-spacing:0.2em;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--border);padding-bottom:0.4em;margin:0 0 var(--space-s,0.8em)}
+a{color:var(--accent)}
+input{font-family:inherit;background:var(--input-bg,#08192b);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:0.4em}
+:where(button:not(.key,.btn,.tab,.btn-close)){font-family:inherit;font-size:0.95em;padding:0.5em 1em;background:var(--surface-2,#08192b);color:var(--accent);border:1px solid var(--border);border-radius:5px;cursor:pointer;letter-spacing:0.05em}
+:where(button:not(.key,.btn,.tab,.btn-close)):hover{border-color:var(--accent);box-shadow:0 0 8px var(--accent)}
+:where(button:not(.key,.btn,.tab,.btn-close)):active{background:var(--surface-2,#0f2a44)}
+:where(button:not(.key,.btn,.tab,.btn-close)):disabled{opacity:0.35;cursor:default;box-shadow:none}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:1px solid var(--accent);outline-offset:2px}
+.ok{color:var(--success)}
+.err{color:var(--danger)}
+.rec{color:var(--danger);font-weight:bold;text-shadow:0 0 8px var(--danger)}
+.idle{color:var(--success)}
+table{border-collapse:collapse;width:100%;font-size:0.82em}
+td,th{padding:0.3em 0.5em;border-bottom:1px solid var(--border)}
+th{color:var(--muted);text-transform:uppercase;font-size:0.72em;letter-spacing:0.08em;text-align:left}
+
+/* Panels get HUD corner brackets - the recurring "sci-fi readout" motif
+   tying the three columns together. */
+.panel{position:relative;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:var(--space-m,1em) var(--space-l,1.2em);box-shadow:var(--panel-shadow,0 0 20px rgba(0,180,255,0.08),inset 0 0 30px rgba(0,180,255,0.03))}
+.panel::before,.panel::after{content:'';position:absolute;width:14px;height:14px;border:2px solid var(--accent);opacity:0.55}
+.panel::before{top:-1px;left:-1px;border-right:none;border-bottom:none}
+.panel::after{bottom:-1px;right:-1px;border-left:none;border-top:none}
+.left{text-align:left}
+.center{text-align:center}
+.right{text-align:right}
+.right table{text-align:right}
+.right td:first-child{text-align:left;color:var(--muted)}
+
+/* Header deck: [logo] [OLED] [rotary] [transport], matching the physical
+   front panel's left-to-right layout. Settings/logout sit apart, top right,
+   since they're not physical-panel controls.
+   Every component here is sized fluidly (clamp()/vw) so as the viewport
+   narrows the whole deck shrinks in BOTH width and height together on one
+   row - no overflow, no horizontal scroll - instead of only dropping to a
+   small size at one fixed breakpoint. */
+header.deck{position:relative;display:flex;flex-direction:var(--pi-deck-dir,row);align-items:center;justify-content:center;gap:clamp(0.3em,1.2vw,1.6em);flex-wrap:nowrap;padding:clamp(0.6em,1.2vw,1.2em) clamp(0.5em,2.5vw,5.5em);border-bottom:1px solid var(--border);margin-bottom:1.5em}
+.deck-logo .logo-svg{width:clamp(0px,11vw,255px)}
+.oled-frame{background:#000;border:2px solid var(--border);border-radius:6px;padding:clamp(3px,0.6vw,8px);display:inline-block;box-shadow:var(--panel-shadow,0 0 25px rgba(0,180,255,0.15))}
+.oled-frame img{width:clamp(170px,32vw,440px);height:auto;aspect-ratio:4/1;image-rendering:pixelated;display:block}
+.encoder-row{display:flex;align-items:center;gap:clamp(0.2em,0.5vw,0.5em)}
+.encoder-row button{font-size:clamp(0.7em,1.5vw,1.3em);width:clamp(1.3em,2.6vw,2.3em);padding:0.2em 0}
+.encoder-row .click{border-radius:50%;width:clamp(1.3em,2.6vw,2.3em);height:clamp(1.3em,2.6vw,2.3em);padding:0}
+/* Transport buttons: equal-sized icon squares, 60% of the OLED frame's
+   110px rendered height (see .oled-frame img above). Both dimensions shrink
+   with the viewport so the row always fits. Icons come from the theme's
+   ftl-themes sprite: stroke inherits each key's color via currentColor. */
+.transport-row{display:flex;gap:clamp(0.2em,0.5vw,0.6em)}
+.transport-row .icon{width:clamp(14px,2.2vw,30px);height:clamp(14px,2.2vw,30px);min-width:clamp(14px,2.2vw,30px)}
+.transport-row button{width:clamp(30px,4.6vw,66px);height:clamp(30px,4.6vw,66px);padding:0;display:flex;align-items:center;justify-content:center}
+/* The deck keys are ftl-themes' .key (v5): .key-mute (REC, red),
+   .key-sel (STOP, accent) and .key-on (PLAY, green), lit through
+   aria-pressed - REC while a take records, PLAY while playing (flashing
+   while paused, the panel lamp's ~2 Hz), STOP while stopped. Owner rule:
+   a key always shows its colour, dim while its LED is off, and glows
+   strongly when on - so the off look and the glow are set through the
+   component's own tokens, mixed from each key's --key-lit. */
+.transport-row .key{width:clamp(30px,4.6vw,66px);height:clamp(30px,4.6vw,66px);padding:0;font-size:inherit;cursor:pointer;
+  --key-fg:color-mix(in srgb,var(--key-lit) 45%,transparent);
+  --key-border:color-mix(in srgb,var(--key-lit) 32%,var(--border));
+  --key-bg:color-mix(in srgb,var(--key-lit) 6%,var(--surface-2));
+  --key-glow:0 0 0.9em 0.15em color-mix(in srgb,var(--key-lit) 75%,transparent),0 0 2.4em 0.3em color-mix(in srgb,var(--key-lit) 35%,transparent)}
+.transport-row .key[aria-pressed="true"] svg{filter:drop-shadow(0 0 0.3em var(--key-lit-fg))}
+.transport-row .key.is-flashing{animation:pi-lamp-flash 0.5s steps(1,end) infinite alternate}
+@keyframes pi-lamp-flash{to{background:var(--key-bg);color:var(--key-fg);border-color:var(--key-border);box-shadow:none}}
+@media (prefers-reduced-motion:reduce){.transport-row .key.is-flashing{animation:none;border-style:dashed}}
+/* Text mode: the same transport keys labelled instead of glyphs. Owner
+   rule: the keys keep the icon mode's size (the squares above); only the
+   label is sized to fit one inside them. */
+.transport-row.text .key{font-size:clamp(8px,0.95vw,14px);letter-spacing:0.04em;padding:0;overflow:hidden;white-space:nowrap}
+
+.header-actions{position:absolute;top:0.8em;right:clamp(0.5em,2vw,1.5em);display:flex;gap:0.5em}
+/* .icon-btn is applied to both a <button> (Settings) and an <a> (Log out)
+   - the base button{} rule above only targets <button>, so colors/border
+   are repeated here rather than relied on from that selector. Icons are
+   .icon strokes inheriting currentColor; the lamp colors the span. */
+.icon-btn{width:clamp(1.8em,2.6vw,2.2em);height:clamp(1.8em,2.6vw,2.2em);border-radius:50%;padding:0;display:flex;align-items:center;justify-content:center;background:var(--surface-2,#08192b);color:var(--accent);border:1px solid var(--border);cursor:pointer;text-decoration:none}
+.icon-btn .icon{width:clamp(14px,1.8vw,18px);height:clamp(14px,1.8vw,18px);min-width:clamp(14px,1.8vw,18px)}
+.icon-btn:hover{border-color:var(--warning);color:var(--warning)}
+/* Conn lamp: broadcast glyph showing the telemetry socket state - glow blue
+   while the server pushes, error red while disconnected. A span, not a
+   button: no pointer affordance, and no hover recolor (it must never read
+   as a control). The icon stroke inherits the span's color. */
+/* Server link: the broadcast glyph plus ftl-themes' .lamp - lit in the
+   accent while the telemetry socket pushes, .is-error while unreachable. */
+.conn{display:inline-flex;align-items:center;gap:0.4em;padding:0 0.3em;color:var(--muted);--lamp-on:var(--accent)}
+.conn .icon{width:1.1em;height:1.1em;min-width:1.1em}
+/* Download ALL: a small labeled action in the Recordings heading - text,
+   not just an icon, so its function reads at a glance. */
+.dl-all{float:right;font-size:0.7em;letter-spacing:0.08em;color:var(--accent);background:var(--surface-2,#08192b);border:1px solid var(--border);border-radius:5px;padding:0.15em 0.5em;text-decoration:none;font-weight:normal;display:inline-flex;align-items:center;gap:0.35em}
+.dl-all .icon{width:1em;height:1em;min-width:1em}
+.dl-all:hover{border-color:var(--accent)}
+
+.grid{display:grid;grid-template-columns:var(--pi-columns,minmax(0,1fr));gap:var(--pi-gap,1.2em)}
+.grid>*{min-width:0}
+/* Layout bridge (companion to the :root color bridge above): the structural
+   knobs a layout theme may turn, with the built-in geometry as fallback.
+   Themes set --pi-* under their own scope to reflow the page (e.g. a wall
+   panel stacking to one column); unthemed, every fallback applies and the
+   layout is byte-identical. Deliberately a short list - deck internals,
+   meter footer and modal sheets stay app-owned (see blue-future's
+   stays-app-side section); regions themselves are shell-arranged. */
+
+/* app shell none-case (ftl-themes#3): with no theme linked these hooks
+   must generate zero boxes: display:contents dissolves the wrapper (children lay
+   out against body as they always did); the decorative rail is always empty
+   in this app, so it never displays. Linked themes override both. */
+main.app-main{display:contents}
+.app-rail:empty{display:none}
+
+.recordings-section h2{font-size:1.1em;letter-spacing:0.05em}
+/* The former Status panel, under the reel-to-reel (owner layout). */
+.deck-status{margin-top:0.6em}
+.deck-status table{width:100%}
+/* The table is the shared .table.is-sticky (sticky head + themed rows);
+   only the download cell's right alignment stays app-owned. */
+.recs-dl{text-align:right}
+/* One line per take: the table scrolls sideways in its own wrapper rather
+   than wrapping dates onto three lines or widening the page. */
+.recordings-wrap .table td,.recordings-wrap .table th{white-space:nowrap}
+/* Channel names: the summary stays one line; the rename form opens below. */
+.recs-chans summary{cursor:pointer;max-width:16em;overflow:hidden;text-overflow:ellipsis;color:var(--accent)}
+.chan-form{display:grid;gap:0.3em;margin:0.4em 0;white-space:normal}
+.chan-row{display:grid;grid-template-columns:2.2em minmax(8em,14em) auto;align-items:center;gap:0.5em;font-size:0.85em}
+.chan-row small{color:var(--muted)}
+.recs-note{font-size:0.75em;color:var(--muted);margin:0.6em 0 0}
+
+/* Scrollable table wrapper for narrow viewports */
+.recordings-wrap{overflow-x:auto;max-width:100%}
+
+/* Owner layout: one column (Transport Status, then Recordings under the
+   reel-to-reel) and no pane scrolls - every pane is as tall as what it
+   holds and the page scrolls instead. Only a recordings table wider than
+   the screen scrolls sideways, inside its own wrapper. */
+.panel.center .deck-status{max-width:56rem;margin-left:auto;margin-right:auto}
+
+/* Modals: the settings sheet and the stop-recording confirmation. The box,
+   overlay and close button are the shared modal family; this app keeps
+   only the open/close toggle (the overlay is always display:flex) and the
+   two sheets' own sizing. */
+.modal-backdrop{display:none;z-index:200}
+.modal-backdrop.open{display:flex}
+.modal--confirm{position:relative}
+.stop-prompt{color:var(--muted);margin:var(--space-l,1.2em) 0}
+.stop-actions{display:flex;gap:var(--space-s,0.8em);justify-content:flex-end}
+.stop-actions button{min-width:7em;padding:0.8em 1em}
+.modal--confirm .btn-close{position:absolute;top:0.9em;right:0.9em}
+
+/* Settings modal: a sheet with a fixed header bar and a scrollable body, so
+   a long setting list never runs past the viewport edge. Setting families are
+   grouped under section titles and laid out on a responsive 2-column grid. */
+.modal--settings{width:min(680px,94vw);max-height:88vh;display:flex;flex-direction:column;padding:0}
+.modal--settings .modal-header{padding:var(--space-m,1.1em) var(--space-l,1.4em);margin:0;border-bottom:1px solid var(--border)}
+/* Settings sheet: the library's vertical tab rail beside scrolling panes.
+   The rail is fixed-width, the active pane fills the rest; panes are plain
+   group grids, shown one at a time (see selectSettingsTab). */
+.modal--settings .modal-body{display:flex;gap:var(--space-s,0.75rem);min-height:0;overflow:hidden;padding:var(--space-s,0.9em) var(--space-l,1.4em) var(--space-l,1.4em)}
+.settings-tabs{flex:none;min-width:9.5em;overflow-y:auto}
+.settings-panes{flex:1;min-width:0;overflow-y:auto}
+.settings-pane{display:none}
+.settings-pane.is-active{display:block}
+/* Narrow screens: the rail becomes a horizontal scroll row above the pane. */
+@media (max-width:800px){
+  .modal--settings .modal-body{flex-direction:column;overflow-y:auto}
+  .settings-tabs[aria-orientation="vertical"]{flex-direction:row;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;min-width:0;border-inline-end:0;border-bottom:1px solid var(--border);padding-inline-end:0}
+  .settings-tabs[aria-orientation="vertical"] > .tab{flex:none;border-bottom-color:transparent}
+  .settings-tabs[aria-orientation="vertical"] > .tab.is-active{border-bottom:2px solid var(--tab-underline-active,var(--accent));border-inline-end-width:0}
+  .settings-panes{overflow:visible}
+}
+.settings-group{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:var(--space-s,0.7em);padding:1em 0 0.4em}
+/* Rows/labels/hints/selects/inputs are the shared field-row family; the
+   only app-owned pieces are the pieces the library doesn't know: the form
+   layout inside a row and the paired SSID/password fields. */
+.field-row form{display:flex;align-items:center;gap:var(--space-s,0.8em);flex:1;width:100%}
+.field-row form .input-group{flex:1 1 auto;min-width:0;width:auto}
+.field-row .select{min-width:9em}
+.field-row .input[type="number"]{flex:none;width:6em}
+#config-msg:empty{display:none}
+.field-row--pair{gap:0.8em 1.2em;flex-wrap:wrap}
+.field-row--pair .field{flex:1 1 42%;display:flex;align-items:center;gap:0.6em;min-width:0}
+.field-row--pair .field label{flex:none;width:auto;max-width:8em}
+.field-row--pair .field input{flex:1;min-width:0}
+/* The control itself is the shared .switch. Two small overrides let
+   this app's status readout ride inside the same <label>: the switch
+   reverts to content width and the track regains a relative box, so the
+   readout sits beside the pill instead of under the absolute track. */
+.switch:has(.switch-readout){width:auto;gap:0.7em}
+.switch:has(.switch-readout) .switch-track{position:relative;inset:auto;width:calc(2.6em*var(--density,1));height:calc(1.4em*var(--density,1))}
+.switch-readout{font-size:0.82em;letter-spacing:0.08em;position:relative;min-width:5em;text-align:center;color:var(--muted,#2c4a66)}
+.switch-readout::after{content:attr(data-off)}
+.switch input:checked ~ .switch-readout{color:var(--accent);text-shadow:0 0 6px rgba(0,217,255,0.6)}
+.switch input:checked ~ .switch-readout::after{content:attr(data-on)}
+
+/* Continuous OLED brightness slider: a wide Sci-Fi range control with a
+   glowing track and thumb, sized so a single row holds label + live % readout
+   + slider (the readout is updated inline by the fragment's oninput). */
+/* The brightness slider is the shared .slider; only its flex sizing
+   (one row holds label + live % readout + slider) stays app-owned. */
+.slider{flex:1 1 auto;min-width:0}
+
+/* Transport deck: ftl-themes' .media-deck (v5), whose reel-to-reel was
+   adapted from this very deck. It draws the plate, reels, tape, head and
+   transport lamp from theme tokens and owns the motion: the app only puts
+   is-recording / is-playing / is-paused on #deck (applyMeter). Reduced
+   motion (OS or data-motion) stops every animation. What the component
+   does not have yet stays here: the 7-segment counter, the corner
+   brackets and the INFERNO-LINK lamp (asked for upstream: ftl-themes#66). */
+.transport-deck.media-deck{width:100%;margin:0 0 0.6em;padding:0;background:none;border:0;box-shadow:none}
+.transport-deck .media-deck-visual{display:block;width:100%;max-width:760px;height:auto;margin:0 auto}
+.media-deck .deck-corner{fill:none;stroke:var(--accent);stroke-width:2;opacity:0.45}
+.media-deck.is-recording .device-lamp{filter:drop-shadow(0 0 6px var(--danger))}
+.media-deck.is-playing .device-lamp{filter:drop-shadow(0 0 4px var(--success))}
+.media-deck #linkLamp{fill:var(--deck-well,var(--surface))}
+.media-deck #linkLamp.on{fill:var(--accent);filter:drop-shadow(0 0 3px var(--accent))}
+/* Both reels turn the same way, as on a real deck: the theme spins the
+   take-up reel clockwise and reverses only the supply reel, so reverse the
+   take-up (right) reel too. Only the direction changes; Reduce Motion
+   still stops the animation in the theme. */
+.media-deck:is(.is-playing,.is-recording) #reelR .reel-spin{animation-direction:reverse}
+/* The lit 7-segment time display. Every segment is an SVG line (see the
+   buildSeg7 JS); the dim .s7 shows all segments faintly so the display
+   reads as a proper 7-segment counter even for unlit digits. The whole display
+   is skewed to the right for an italic, forward-leaning readout. */
+#seg7{font-style:italic}
+#seg7 .s7{stroke:rgba(0,180,255,0.16);stroke-width:2.5;stroke-linecap:round}
+#seg7 .s7.on{stroke:var(--accent);filter:drop-shadow(0 0 4px rgba(0,217,255,0.75))}
+#seg7 .s7-dot{fill:rgba(0,180,255,0.16)}
+#seg7 .s7-dot.on{fill:var(--accent);filter:drop-shadow(0 0 4px rgba(0,217,255,0.75))}
+
+/* Pinned meter footer: always visible at the bottom of the viewport so the
+   VU levels stay on screen while you operate the transport, with a slim
+   header bar that collapses/expands the meter bank on demand. */
+/* Level meters: a full-width band right under the header, as tall as the
+   header (--deck-h is measured from it, see the script), collapsible to
+   its bar with a large toggle. Owner layout 2026-10-05. */
+.meter-band{display:flex;align-items:stretch;gap:var(--space-m,1em);min-height:var(--deck-h,150px);margin:0 0 1.2em;background:rgba(3,8,15,0.6);border:1px solid var(--border);border-radius:10px;padding:0.4em 1em;box-sizing:border-box}
+.meter-bar{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:0.5em;flex:none;min-width:7.5em}
+.meter-title{font-size:0.7em;letter-spacing:0.25em;color:var(--muted);text-transform:uppercase}
+.meter-caret{width:2.9em;height:2.9em;border-radius:50%}
+.meter-caret .icon{width:1.6em;height:1.6em;min-width:1.6em}
+.meter-body{flex:1;min-width:0;display:flex;align-items:center;overflow:hidden;transition:opacity 0.25s ease}
+.meter-body{justify-content:center}
+
+/* Collapsed, the band disappears entirely: the header's large Meters
+   button brings it back. */
+.meter-band.collapsed{display:none}
+/* Collapsed meters: the band's own label + caret, at the header's left
+   edge, so opening matches the collapse control. */
+.meter-open[hidden]{display:none}
+/* In the header's bottom-right corner, clear of the transport keys. */
+header.deck .meter-open{position:absolute;left:clamp(0.5em,2vw,1.5em);top:50%;transform:translateY(-50%);min-width:0}
+@media (max-width:800px){header.deck .meter-open{position:static;transform:none;flex-direction:row;align-items:center}}
+/* Footer: disk space and record time, plus the System pane toggle. */
+.app-footer{position:fixed;left:0;right:0;bottom:0;z-index:150;display:flex;align-items:center;gap:var(--space-m,1em);padding:0.45em 1.5em;background:rgba(3,8,15,0.94);border-top:1px solid var(--border);box-shadow:0 -8px 30px rgba(0,180,255,0.10);font-size:0.85em;color:var(--muted)}
+.footer-disk{display:inline-flex;align-items:center;gap:0.45em;flex-wrap:wrap}
+.footer-disk .progress{width:6em}
+.sys-toggle{margin-left:auto;display:inline-flex;align-items:center;gap:0.5em;padding:0.35em 1em;font-size:0.95em}
+.sys-toggle .icon{width:1.3em;height:1.3em;min-width:1.3em}
+.sys-toggle svg{transform:rotate(180deg);transition:transform 0.2s ease}
+.sys-toggle[aria-expanded="true"] svg{transform:none}
+/* System: a full-width pane that pops up above the footer; graphs flow
+   in a grid that wraps onto more rows rather than cramping. */
+.sys-pane{position:fixed;left:0;right:0;bottom:var(--footer-h,2.6em);z-index:149;max-height:72vh;overflow-y:auto;padding:0.6em 1.5em 1em;background:rgba(3,8,15,0.96);border-top:1px solid var(--border);box-shadow:0 -10px 40px rgba(0,180,255,0.14)}
+.sys-pane[hidden]{display:none}
+.sys-pane h2{margin:0.2em 0 0.4em;font-size:0.8em;letter-spacing:0.25em;text-transform:uppercase;color:var(--muted)}
+/* The meter bank is ftl-themes' console (v5): banks of 8 .strip channels
+   (owner layout 2026-10-06: more rows instead of scrolling, broken only
+   between banks of 8 so no display width wastes space), each bank a
+   .mixer led by its own .scale.is-meter legend; the banks wrap.
+   A strip is the channel number, a segmented .meter.meter-v in a
+   .strip-fader, then a .scribble with the channel's name. The app sets
+   only sizes: strips barely wider than the meter (no gaps between
+   meters), and a fader length that keeps one row as tall as the header.
+   Levels, peaks and the dB ticks are placed with the same taper (vuPct). */
+.meter-rows{display:flex;flex-wrap:wrap;justify-content:center;align-items:flex-start;gap:4px;max-width:100%}
+.meter-group{--strip-width:2.6rem;--mixer-gap:2px;--meter-thickness:1rem;--fader-length:calc(var(--deck-h,150px) - 5.4rem);flex:none;max-width:100%;overflow-x:visible}
+.meter-group .strip{padding:0.25rem 0.1rem;gap:0.2rem}
+.meter-group .strip-fader{margin-top:0}
+/* Peak hold (WebUI, as on the OLED): a 3px bar at the held peak in the
+   colour of its zone, glowing; hidden at the floor. The theme's thin
+   .meter-peak line follows the instantaneous peak. */
+.meter-group .meter-hold{position:absolute;left:0;right:0;bottom:var(--meter-hold,0%);height:3px;transform:translateY(50%);background:var(--meter-low,var(--success));box-shadow:0 0 4px currentColor;color:var(--meter-low,var(--success));pointer-events:none;z-index:2}
+.meter-group .meter[data-hold="mid"] .meter-hold{background:var(--meter-mid,var(--warning));color:var(--meter-mid,var(--warning))}
+.meter-group .meter[data-hold="high"] .meter-hold{background:var(--meter-high,var(--danger));color:var(--meter-high,var(--danger))}
+.meter-group .meter[data-hold="off"] .meter-hold{display:none}
+.meter-group .strip-num{font-size:0.62rem;line-height:1;text-align:center;color:var(--muted);font-variant-numeric:tabular-nums}
+.meter-group .strip-legend{--strip-width:2.3rem}
+.meter-group .scribble{text-align:center;padding:0.12rem 0.1rem}
+.meter-group .scribble-name{font-size:0.56rem;letter-spacing:0;white-space:nowrap;text-overflow:ellipsis;cursor:text}
+/* Renaming: the input pops out wider than the strip, over its neighbours. */
+.meter-group .scribble{position:relative}
+.meter-group .chan-label-input{position:absolute;left:50%;bottom:0;transform:translateX(-50%);z-index:5;width:9rem;font-size:0.75rem;padding:0.15em 0.35em;text-transform:none}
+
+/* Telemetry panel: collapsible system stats with per-core mini graphs */
+.sys-graphs{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,22rem),1fr));gap:0.6em 1.4em}
+.sys-graph{min-width:0}
+.sys-graphs h3{font-size:.68em;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);margin:.4em 0 .2em}
+.sys-graphs .uplot{width:100%}
+.sys-graphs .u-legend{font-size:.68em;color:var(--muted);background:transparent;border:none;padding-left:0}
+.sys-graphs .u-legend th{font-weight:normal}
+.sys-graphs .u-legend .u-value{color:var(--text)}
+.sys-wait{font-size:.72em;color:var(--muted)}
+
+/* Mobile: stack the three-column grid, let the fixed OLED frame shrink to
+    the viewport instead of overflowing it, and give the header/footer more
+    vertical room now that their contents wrap onto more lines. */
+/* Mobile: the header already scales fluidly with vw widths (see the clamp()
+    rules above), so here we only need to clear the fixed decorations that
+    would crowd out the OLED and controls on a phone: hide the logo and the
+    meter footer badge, tighten gutters, and collapse the status columns to a
+    single column. The OLED, encoder, and transport keep shrinking with the
+    viewport so the single-row deck never overflows. */
+@media (max-width: 800px) {
+  body{padding:0 0.4em 4em}
+  header.deck{flex-wrap:wrap}
+  /* In-flow on narrow screens: the absolute corner position overlays the
+     centered logo once the deck wraps. */
+  .header-actions{position:static;margin-left:auto}
+  .deck-logo{flex:1 0 100%;text-align:center;display:block}
+  .deck-logo .logo-svg{width:clamp(80px,20vw,200px)}
+  .oled-frame{flex:0 0 auto}
+  .encoder-row{flex:0 0 auto}
+  .transport-row{flex:1 0 100%;justify-content:center}
+  .oled-frame img{width:min(190px,40vw);height:auto;aspect-ratio:4/1}
+  .grid{grid-template-columns:1fr}
+  .transport-deck{padding:0}
+  .meter-title{font-size:0.6em}
+  .meter-badge{display:none}
+  .meter-band{height:auto;flex-direction:column}
+  .meter-group{--fader-length:7rem}
+  .meter-bar{flex-direction:row;align-items:center}
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .meter-body{animation:none;transition:none}
+  .switch-track,.switch-thumb{transition:none}
+}
+
+/* WiFi settings panel */
+.wifi-qr-row{display:flex;align-items:center;gap:var(--space-m,1em);flex-wrap:wrap}
+.wifi-qr-info p{margin:0.2em 0;font-size:0.85em}
+.wifi-qr-img img{width:180px;height:180px;image-rendering:pixelated;border:1px solid var(--border);border-radius:4px}
+/* The theme owns the page background; the built-in gradient underneath is
+   only a fallback while the bundle loads. */
+html[data-theme] body{background:transparent}
+</style>
+</head>
+<body class="app">
+
+<!-- app shell (ftl-themes#3): dual-classed regions so layout themes can
+     arrange the page while the built-in look (no theme linked) renders
+     exactly as before - the app's own selectors keep matching, and the
+     none-case rules below neutralize the new hooks. -->
+<header class="deck app-bar">
+  <div class="deck-logo">{{.Logo}}</div>
+  <div class="oled-frame"><img id="oled" src="/api/display.png" alt="OLED display" onerror="if(!this.dataset.r){this.dataset.r=1;location.reload()}"></div>
+  <div class="encoder-row">
+    <button hx-post="/api/input/encoder/left" aria-label="Encoder left" title="Encoder left"><svg class="icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-chevron-left"/></svg></button>
+    <button class="click" hx-post="/api/input/encoder/click" aria-label="Encoder click" title="Encoder click">&#9679;</button>
+    <button hx-post="/api/input/encoder/right" aria-label="Encoder right" title="Encoder right"><svg class="icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-chevron-right"/></svg></button>
+  </div>
+  <div class="transport-row" id="transportRow"></div>
+  <div class="meter-open meter-bar" id="meterOpen" hidden>
+    <span class="meter-title">Level meters</span>
+    <button class="icon-btn meter-caret" id="meterOpenBtn" type="button" title="Show the level meters" aria-label="Show the level meters" aria-controls="meterFooter" aria-expanded="false">
+      <svg class="icon" aria-hidden="true" style="transform:rotate(-90deg)"><use href="{{.IconSprite}}#icon-chevron-down"/></svg>
+    </button>
+  </div>
+  <div class="header-actions">
+    <span class="conn" id="connLamp" role="status" title="Server disconnected" aria-label="Server disconnected">
+      <svg class="icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-broadcast"/></svg><span class="lamp is-error" aria-hidden="true"></span>
+    </span>
+    <button class="icon-btn btn btn-icon" id="settingsBtn" type="button" title="Settings">
+      <svg class="icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-settings"/></svg>
+    </button>
+    <form action="/logout" method="POST" style="display:inline;margin:0">
+      <button class="icon-btn btn btn-icon" title="Log out" aria-label="Log out">
+      <svg class="icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-logout"/></svg>
+      </button>
+    </form>
+    <form action="/api/settings/rotate-token" method="POST" style="display:inline;margin:0" onsubmit="return confirm('Rotate the access token? Every session (including this one) is logged out.')">
+      <button class="icon-btn btn btn-icon" title="Rotate access token" aria-label="Rotate access token">
+      <svg class="icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-refresh"/></svg>
+      </button>
+    </form>
+  </div>
+</header>
+
+<aside class="app-rail" aria-hidden="true"></aside>
+
+
+<main class="app-main">
+<section class="meter-band" id="meterFooter" aria-label="Level meters">
+  <div class="meter-bar">
+    <span class="meter-title">Level meters</span>
+    <span class="meter-badge badge badge-accent" id="meterBadge">--</span>
+    <button class="icon-btn meter-caret" id="meterToggle" type="button" title="Collapse/expand meters" aria-label="Collapse or expand level meters" aria-controls="meterBody" aria-expanded="true">
+      <svg class="icon" id="meterCaretSvg" aria-hidden="true"><use href="{{.IconSprite}}#icon-chevron-down"/></svg>
+    </button>
+  </div>
+  <div class="meter-body" id="meterBody">
+    <div class="meter-rows" id="chMeters" role="group" aria-label="Input levels"></div>
+  </div>
+</section>
+
+<div class="grid">
+  <div class="panel center panel">
+    <h2>Transport Status</h2>
+    <section class="transport-deck media-deck" id="deck" aria-label="Tape transport">
+      <svg class="media-deck-visual r2r" viewBox="0 0 820 265" preserveAspectRatio="xMidYMid meet" role="img" aria-labelledby="transportTitle transportDesc">
+        <title id="transportTitle">Reel-to-reel transport</title>
+        <desc id="transportDesc">Two tape reels connected by an angled tape path and a read/write head time display.</desc>
+        <defs>
+          <linearGradient id="deckBg" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="var(--deck-face,#132947)"/>
+            <stop offset="55%" stop-color="var(--deck-well,#0d1c31)"/>
+            <stop offset="100%" stop-color="var(--bg,#0a1526)"/>
+          </linearGradient>
+          <linearGradient id="headFace" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="var(--deck-face,#142f4d)"/>
+            <stop offset="100%" stop-color="var(--deck-well,#0a1a30)"/>
+          </linearGradient>
+        </defs>
+
+        <rect class="plate" x="2" y="2" width="816" height="261" rx="10" fill="url(#deckBg)"/>
+        <rect class="plate-bezel" x="2" y="2" width="816" height="261" rx="10"/>
+
+        <g class="deck-grid">
+          <path d="M40 26 H780 M40 248 H780"/>
+          <path d="M90 26 V248 M730 26 V248" opacity="0.5"/>
+        </g>
+
+        <circle class="deck-screw" cx="18" cy="18" r="4"/>
+        <circle class="deck-screw" cx="802" cy="18" r="4"/>
+        <circle class="deck-screw" cx="18" cy="247" r="4"/>
+        <circle class="deck-screw" cx="802" cy="247" r="4"/>
+
+        <path class="tape-shadow" d="M211 161 L330 196 L490 196 L609 161"/>
+        <path class="tape is-moving" id="tapePath" d="M211 159 L330 194 L490 194 L609 159"/>
+
+        <g class="reel-g reel-supply" id="reelL" transform="translate(170,105) scale(1.25) translate(-170,-105)">
+          <circle class="reel-ring" cx="170" cy="105" r="61"/>
+          <circle class="reel-disc" cx="170" cy="105" r="58"/>
+          <g class="reel-spin">
+            <path class="reel-wind" d="M170 105 m0 -54 a54 54 0 0 1 0 108 a54 54 0 0 1 0 -108"/>
+            <path class="reel-wind" d="M170 105 m0 -46 a46 46 0 0 1 0 92 a46 46 0 0 1 0 -92"/>
+            <path class="reel-wind" d="M170 105 m0 -38 a38 38 0 0 1 0 76 a38 38 0 0 1 0 -76"/>
+            <path class="reel-wind" d="M170 105 m0 -30 a30 30 0 0 1 0 60 a30 30 0 0 1 0 -60"/>
+            <path class="reel-spoke" d="M170 105 L161 64 Q170 59 179 64 Z"/>
+            <path class="reel-spoke" d="M170 105 L161 64 Q170 59 179 64 Z" transform="rotate(120 170 105)"/>
+            <path class="reel-spoke" d="M170 105 L161 64 Q170 59 179 64 Z" transform="rotate(240 170 105)"/>
+            <circle class="reel-hub" cx="170" cy="105" r="13"/>
+            <circle class="reel-center" cx="170" cy="105" r="5"/>
+          </g>
+        </g>
+        <g class="reel-g" id="reelR" transform="translate(650,105) scale(1.25) translate(-650,-105)">
+          <circle class="reel-ring" cx="650" cy="105" r="61"/>
+          <circle class="reel-disc" cx="650" cy="105" r="58"/>
+          <g class="reel-spin">
+            <path class="reel-wind" d="M650 105 m0 -54 a54 54 0 0 1 0 108 a54 54 0 0 1 0 -108"/>
+            <path class="reel-wind" d="M650 105 m0 -46 a46 46 0 0 1 0 92 a46 46 0 0 1 0 -92"/>
+            <path class="reel-wind" d="M650 105 m0 -38 a38 38 0 0 1 0 76 a38 38 0 0 1 0 -76"/>
+            <path class="reel-wind" d="M650 105 m0 -30 a30 30 0 0 1 0 60 a30 30 0 0 1 0 -60"/>
+            <path class="reel-spoke" d="M650 105 L641 64 Q650 59 659 64 Z"/>
+            <path class="reel-spoke" d="M650 105 L641 64 Q650 59 659 64 Z" transform="rotate(120 650 105)"/>
+            <path class="reel-spoke" d="M650 105 L641 64 Q650 59 659 64 Z" transform="rotate(240 650 105)"/>
+            <circle class="reel-hub" cx="650" cy="105" r="13"/>
+            <circle class="reel-center" cx="650" cy="105" r="5"/>
+          </g>
+        </g>
+
+        <text class="deck-text" x="410" y="122" text-anchor="middle">PI9696</text>
+        <text class="deck-text" id="tcText" x="410" y="140" text-anchor="middle"></text>
+
+        <circle class="device-guide" cx="221" cy="162" r="7"/>
+        <circle class="device-guide" cx="599" cy="162" r="7"/>
+        <circle class="device-guide" cx="330" cy="194" r="7"/>
+        <circle class="device-guide" cx="490" cy="194" r="7"/>
+
+        <g class="head">
+          <polygon class="head-plate" points="272,252 272,198 288,184 532,184 548,198 548,252" fill="url(#headFace)"/>
+          <path class="head-edge" d="M284 198 V246 M536 198 V246"/>
+          <path class="head-gap" d="M402 190 L418 190"/>
+          <rect class="head-window" x="300" y="198" width="220" height="48" rx="3"/>
+          <path class="head-grid" d="M304 210 H516 M304 222 H516 M304 234 H516 M304 246 H516 M324 198 V246 M348 198 V246 M372 198 V246 M396 198 V246 M420 198 V246 M444 198 V246 M468 198 V246 M492 198 V246"/>
+          <g id="seg7" transform="translate(312,202) skewX(-10) scale(2.12)"></g>
+        </g>
+
+        <text class="deck-text" x="146" y="24">SUPPLY</text>
+        <text class="deck-text" x="614" y="24">TAKE-UP</text>
+
+        <g class="hud">
+          <path class="plate-bezel" d="M40 249 H780"/>
+          <circle class="device-lamp" id="sysLamp" cx="54" cy="255" r="5"/>
+          <text class="deck-text" x="66" y="258">SYS</text>
+          <text class="deck-text" x="352" y="258">TRANSPORT</text>
+          <text class="deck-text" x="697" y="258" text-anchor="end">INFERNO-LINK</text>
+          <circle id="linkLamp" cx="706" cy="255" r="2.5"/>
+        </g>
+
+        <path class="deck-corner" d="M14 30 V14 H30"/>
+        <path class="deck-corner" d="M806 14 H790 V30"/>
+        <path class="deck-corner" d="M14 235 V251 H30"/>
+        <path class="deck-corner" d="M806 251 V235 H790"/>
+      </svg>
+    </section>
+    <div id="teleSock" hx-ext="ws" hx-ws:connect="/ws/telemetry" hx-target="#diskInfo" hx-swap="innerHTML" hidden></div>
+    <div class="field-row deck-status" id="chaseRow">
+      <button type="button" class="btn btn-secondary" id="chaseBtn" title="Play the selected take in sync with incoming timecode" onclick="toggleChase()">Arm Timecode Chase</button>
+      <span class="hint" id="chaseState"></span>
+    </div>
+    <div id="config" class="deck-status" hx-get="/api/config" hx-trigger="load" hx-swap="innerHTML">Loading...</div>
+  </div>
+
+
+<div class="panel recordings-section">
+  <h2>Recordings <a class="dl-all" href="/download-all" title="Download every recording as one ZIP archive (with a manifest.txt listing each file)"><svg class="icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-download"/></svg> Download ALL (.zip)</a></h2>
+  <div id="recordings" class="scroll" hx-get="/api/recordings" hx-trigger="load" hx-swap="innerHTML">Loading...</div>
+</div>
+</div>
+</main>
+
+<section class="sys-pane" id="sysPane" aria-label="System" hidden>
+  <h2>System</h2>
+    <div class="sys-graphs">
+      <div class="sys-graph"><h3>CPU %</h3><div id="cpuChart"><span class="sys-wait">collecting&hellip;</span></div></div>
+      <div class="sys-graph"><h3 title="pi9696's own CPU, % of one core, by subsystem (thread names; see threadcpu.go)">App CPU by subsystem</h3><div id="subChart"><span class="sys-wait">collecting&hellip;</span></div></div>
+      <div class="sys-graph"><h3>RAM MB</h3><div id="ramChart"><span class="sys-wait">collecting&hellip;</span></div></div>
+      <div class="sys-graph"><h3>Temp &deg;C</h3><div id="tempChart"><span class="sys-wait">collecting&hellip;</span></div></div>
+      <div class="sys-graph"><h3>Disk free GB</h3><div id="diskChart"><span class="sys-wait">collecting&hellip;</span></div></div>
+      <pre id="teleHist" hidden></pre>
+    </div>
+</section>
+
+<footer class="app-footer app-status" id="appFooter">
+  <span id="diskInfo" class="footer-disk">Disk /rec &hellip;</span>
+  <button class="sys-toggle btn btn-secondary" id="sysToggle" type="button" aria-controls="sysPane" aria-expanded="false" title="Show or hide the System graphs">
+    <svg class="icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-chevron-down"/></svg><span>System</span>
+  </button>
+</footer>
+
+<div class="modal-backdrop modal-overlay" id="settingsModal">
+  <div class="modal modal-lg modal--settings">
+    <div class="modal-header">
+      <h2>Unit Settings</h2>
+      <button class="btn-close" id="settingsClose" type="button" aria-label="Close settings"></button>
+    </div>
+    <div class="modal-body">
+      <div class="tabs settings-tabs" role="tablist" aria-orientation="vertical" aria-label="Settings groups">
+        <button type="button" class="tab is-active" role="tab" aria-selected="true" data-pane="pane-device" id="tab-device">Device</button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-pane="pane-audio" id="tab-audio">Audio</button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-pane="pane-metering" id="tab-metering">Metering</button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-pane="pane-metadata" id="tab-metadata">Metadata</button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-pane="pane-transport" id="tab-transport">Transport</button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-pane="pane-display" id="tab-display">Display</button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-pane="pane-timecode" id="tab-timecode">Timecode</button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-pane="pane-demo" id="tab-demo">Demo</button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-pane="pane-logging" id="tab-logging">Logging</button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-pane="pane-config" id="tab-config">Config</button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-pane="pane-network" id="tab-network">Network</button>
+      </div>
+      {{template "settingsPanes" .}}
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop modal-overlay" id="stopModal">
+  <div class="modal modal--confirm">
+    <button class="btn-close modal-close" id="stopModalClose" type="button" aria-label="Close"></button>
+    <h2>Stop Recording?</h2>
+    <p class="stop-prompt">The current take is still being written. Stop it now?</p>
+    <div class="stop-actions">
+      <button id="stopConfirm" class="rec" type="button">Stop</button>
+      <button id="stopCancel" type="button">Keep recording</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// The OLED mirror reloads on framebuffer generation change (see
+// displaySeq in the meter payload), not on a blind interval - static
+// screens cost zero image fetches, and this shares eth0 with Inferno's
+// audio-over-IP traffic.
+
+var settingsBtn = document.getElementById('settingsBtn');
+var settingsModal = document.getElementById('settingsModal');
+// Re-render the panes from the unit on every open (see handleSettingsPanes),
+// keeping the selected tab. htmx swaps them so fragment scripts run and the
+// new forms are wired.
+settingsBtn.addEventListener('click', function() {
+  settingsModal.classList.add('open');
+  var cur = document.querySelector('.settings-tabs .tab.is-active');
+  var pane = cur ? cur.dataset.pane : 'pane-device';
+  htmx.ajax('GET', '/api/settings/panes', { target: '#settingsPanes', swap: 'outerHTML' })
+    .then(function() { selectSettingsTab(pane, false); });
+});
+document.getElementById('settingsClose').addEventListener('click', function() { settingsModal.classList.remove('open'); });
+settingsModal.addEventListener('click', function(e) { if (e.target === settingsModal) settingsModal.classList.remove('open'); });
+
+// Settings sheet tabs: the vertical .tabs rail switches the group pane
+// shown beside it (one group at a time instead of a ten-group scroll).
+// Fragments keep their ids, so htmx posts re-render into hidden panes fine.
+// The last open tab persists per browser like the meter collapse below.
+var settingsTabs = Array.prototype.slice.call(document.querySelectorAll('.settings-tabs .tab'));
+function selectSettingsTab(name, save) {
+  if (!document.getElementById(name)) name = 'pane-device';
+  settingsTabs.forEach(function(t) {
+    var on = t.dataset.pane === name;
+    t.classList.toggle('is-active', on);
+    t.setAttribute('aria-selected', on ? 'true' : 'false');
+    var pane = document.getElementById(t.dataset.pane);
+    if (pane) pane.classList.toggle('is-active', on);
+  });
+  if (save !== false) { try { localStorage.setItem('pi9696_settingsTab', name); } catch (e) {} }
+}
+settingsTabs.forEach(function(t) { t.addEventListener('click', function() { selectSettingsTab(t.dataset.pane); }); });
+try { selectSettingsTab(localStorage.getItem('pi9696_settingsTab') || 'pane-device', false); }
+catch (e) { selectSettingsTab('pane-device', false); }
+
+// Transport buttons are drawn by JS so they can switch between ICON and TEXT
+// mode (Settings -> Transport Buttons) and, for the PLAY key, between a play
+// triangle and a pause glyph while a track runs. ICON_MODE is seeded from the
+// server (persisted setting); transportState is kept in sync by applyMeter.
+var ICON_MODE = {{.TransportIcon}};
+var transportState = { playing: false, paused: false, rec: false };
+// SPRITE is the active theme's icon sprite (server-rendered, rewritten by
+// the theme-swap OOB script); icons inherit currentColor, so the transport
+// row's per-key colors apply to the stroke with no fill overrides.
+var SPRITE = {{.IconSprite}};
+function iconGlyph(name) { return '<svg class="icon" aria-hidden="true"><use href="' + SPRITE + '#' + name + '"/></svg>'; }
+// transportKey renders one deck key as ftl-themes' .key (a backlit
+// console key): lit via aria-pressed, which also tells assistive tech the
+// lamp state. post is the hx-post target, or '' for the Stop key (handled
+// by the stop-confirm listener via data-stop).
+function transportKey(cls, post, title, label, lit) {
+  return '<button class="key ' + cls + '"' + (post ? ' hx-post="' + post + '"' : ' data-stop') +
+    ' title="' + title + '" aria-pressed="' + (lit ? 'true' : 'false') + '">' + label + '</button>';
+}
+function renderTransportRow() {
+  var row = document.getElementById('transportRow');
+  // The key shows its next action: pause while playing, play otherwise
+  // (paused: resume). Its lamp shows the state (see .transport-row CSS).
+  var pause = transportState.playing && !transportState.paused;
+  var title = transportState.paused ? 'Resume' : (transportState.playing ? 'Pause' : 'Play');
+  var stopped = !transportState.rec && !transportState.playing && !transportState.paused;
+  var playCls = 'key-on play' + (pause ? ' pause' : '') + (transportState.paused ? ' is-flashing' : '');
+  var html = '';
+  if (ICON_MODE) {
+    html += transportKey('key-mute record', '/api/input/button/record', 'Record', iconGlyph('icon-player-record'), transportState.rec);
+    html += transportKey('key-sel stop', '', 'Stop', iconGlyph('icon-player-stop'), stopped);
+    html += transportKey(playCls, '/api/input/button/play', title, iconGlyph(pause ? 'icon-player-pause' : 'icon-player-play'), transportState.playing || transportState.paused);
+  } else {
+    html += transportKey('key-mute record', '/api/input/button/record', 'Record', 'REC', transportState.rec);
+    html += transportKey('key-sel stop', '', 'Stop', 'STOP', stopped);
+    html += transportKey(playCls, '/api/input/button/play', title, pause ? 'II' : '>', transportState.playing || transportState.paused);
+  }
+  row.className = 'transport-row transport' + (ICON_MODE ? '' : ' text') + (transportState.rec ? ' is-rec' : '') +
+    (transportState.paused ? ' is-pause' : (transportState.playing ? ' is-play' : '')) + (stopped ? ' is-stop' : '');
+  row.innerHTML = html;
+  // These controls are recreated after htmx's initial DOM scan whenever the
+  // play/pause state or button style changes, so explicitly process the new
+  // hx-post nodes.
+  if (window.htmx) htmx.process(row);
+}
+renderTransportRow();
+
+// When the Transport Buttons setting changes in the settings modal, htmx
+// swaps the fragment - listen for that and re-seed ICON_MODE from the
+// select's own value (0=icon,1=text) so the header updates instantly.
+document.body.addEventListener('htmx:after:swap', function(e) {
+  // htmx 4 shape is {ctx, cancelled}: target lives on detail.ctx.target
+  // (same fallback as the teleHist listener below).
+  var d = e.detail || {}, t = d.target || (d.ctx && d.ctx.target);
+  var id = t && (t.id || t);
+  if (id === 'transportmode' || id === '#transportmode') {
+    var sel = (t.querySelector ? t : document.getElementById('transportmode')).querySelector('select[name="idx"]');
+    if (sel) { ICON_MODE = (sel.value === '0'); renderTransportRow(); }
+  }
+});
+
+// Touch screens: stopping a take can be a fat-finger accident, so the STOP
+// transport key first opens a confirmation modal instead of tearing the
+// recording down immediately. Desktop (non-touch) keeps the one-tap
+// behaviour. (The status panel's own Stop button is gone: owner layout.)
+var isTouch = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+var stopModal = document.getElementById('stopModal');
+var stopPending = null;
+function confirmStop(action) {
+  if (!isTouch) { action(); return; }
+  stopPending = action;
+  stopModal.classList.add('open');
+}
+document.getElementById('stopConfirm').addEventListener('click', function() {
+  stopModal.classList.remove('open');
+  if (stopPending) { var a = stopPending; stopPending = null; a(); }
+});
+document.getElementById('stopCancel').addEventListener('click', function() { stopModal.classList.remove('open'); stopPending = null; });
+document.getElementById('stopModalClose').addEventListener('click', function() { stopModal.classList.remove('open'); stopPending = null; });
+stopModal.addEventListener('click', function(e) { if (e.target === stopModal) { stopModal.classList.remove('open'); stopPending = null; } });
+document.addEventListener('click', function(e) {
+  var stopBtn = e.target.closest ? e.target.closest('[data-stop]') : null;
+  if (stopBtn) {
+    e.preventDefault();
+    e.stopPropagation();
+    confirmStop(function(){ fetch('/api/input/button/stop', { method: 'POST' }); });
+  }
+}, true);
+
+// Standard audio-meter log taper: 0dBFS at the top, the configured floor
+// (see FLOOR below, updated from every meter message's floorDB - Settings
+// -> Meter Range) at the bottom, with more of the scale's height given to
+// the top of the range than the bottom. VU_CURVE is expressed as {fraction
+// of the range from floor (0) to 0dBFS (1), display %} pairs, mirroring
+// main.go's idleVUCurve exactly, so a config change on the OLED reshapes
+// this scale identically rather than the two drifting apart.
+var VU_CURVE = [[0, 0], [0.1667, 7], [0.3333, 15], [0.4444, 22], [0.5556, 30], [0.6667, 40], [0.7333, 48], [0.8, 58], [0.8667, 70], [0.9, 78], [0.9333, 85], [0.9667, 92], [1, 100]];
+var FLOOR = -90;
+function vuPct(db) {
+  var frac = (db - FLOOR) / (0 - FLOOR);
+  if (frac <= 0) return VU_CURVE[0][1];
+  if (frac >= 1) return 100;
+  for (var i = 1; i < VU_CURVE.length; i++) {
+    if (frac <= VU_CURVE[i][0]) {
+      var lo = VU_CURVE[i - 1], hi = VU_CURVE[i];
+      var t = (frac - lo[0]) / (hi[0] - lo[0]);
+      return lo[1] + t * (hi[1] - lo[1]);
+    }
+  }
+  return 100;
+}
+
+// rebuildDbScale redraws the tick labels whenever the configured floor
+// changes (including on first load). Each tick is placed with vuPct, the
+// same taper the bars use, so a tick sits exactly where that level's fill
+// reaches. (They used to be placed linearly in dB, so a -12 dBFS peak drew
+// level with the "-20" region of the scale and a -15 dBFS RMS with "-27".)
+var DB_TICKS = [0, -6, -12, -18, -24, -36, -48];
+var scaleFloor = null;
+// rebuildDbScale fills every row's legend (.scale.is-meter); ensureChannels
+// resets scaleFloor when it builds new, empty rows.
+function rebuildDbScale(floor) {
+  if (floor === scaleFloor) return;
+  scaleFloor = floor;
+  document.querySelectorAll('#chMeters .scale.is-meter').forEach(function(scale) {
+    scale.innerHTML = '';
+    DB_TICKS.filter(function(db) { return db > floor + 6; }).concat([floor]).forEach(function(db) {
+      var span = document.createElement('span');
+      span.style.setProperty('--at', vuPct(db) / 100); // .scale.is-meter places marks at --at (0-1)
+      if (db === 0) span.className = 'is-unity';
+      span.textContent = Math.round(db);
+      scale.appendChild(span);
+    });
+  });
+  // Position the green->yellow and yellow->red meter bands at the design's
+  // absolute thresholds (-18 / -6 dBFS) mapped through the current floor.
+  // The shared .meter reads these as --meter-warn-at/-peak-at; the
+  // gradient spans the track by default (fixed upstream in ftl-themes#43).
+  var root = document.documentElement;
+  root.style.setProperty('--meter-warn-at', vuPct(-18) + '%');
+  root.style.setProperty('--meter-peak-at', vuPct(-6) + '%');
+}
+
+// ---- 7-segment time display (inline SVG segments, italic via skewX) ----
+var svgNS = 'http://www.w3.org/2000/svg';
+// Segment endpoints per digit (each digit is 10x18, segments stroke-width 2, round caps)
+// a: top horiz, g: middle, d: bottom horiz, f: top-left vert, b: top-right vert, e: bot-left, c: bot-right
+var SEG = {
+  a: {x1:3, y1:2, x2:7, y2:2},
+  g: {x1:3, y1:9, x2:7, y2:9},
+  d: {x1:3, y1:16, x2:7, y2:16},
+  f: {x1:2, y1:3, x2:2, y2:7},
+  b: {x1:8, y1:3, x2:8, y2:7},
+  e: {x1:2, y1:10, x2:2, y2:14},
+  c: {x1:8, y1:10, x2:8, y2:14}
+};
+var SEG_ON = {
+  '0': 'abcfed', '1': 'bc', '2': 'abged', '3': 'abgcd', '4': 'fgbc', '5': 'afgcd', '6': 'afgedc', '7': 'abc',
+  '8': 'abcdefg', '9': 'abcfgd', ':': 'dots'
+};
+var seg7Root = document.getElementById('seg7');
+var lastSeg7 = '';
+
+function buildSeg7() {
+  if (!seg7Root) return;
+  seg7Root.innerHTML = '';
+  // 8 glyph positions: 6 digits + 2 colons (HH:MM:SS)
+  var x = 0;
+  for (var p = 0; p < 8; p++) {
+    var g = document.createElementNS(svgNS, 'g');
+    var tx = x, ty = 0, sc = 1;
+    // Seconds digits (positions 6,7) render at 75%, bottom-aligned with
+    // the HH:MM pair (ty 3.5 = full 17px baseline minus scaled 13.5px).
+    if (p >= 6) { tx = x + 1.25; ty = 3.5; sc = 0.75; }
+    g.setAttribute('transform', 'translate(' + tx + ',' + ty + ') scale(' + sc + ')');
+    g.setAttribute('data-pos', p);
+    var isColon = (p === 2 || p === 5);
+    if (isColon) {
+      var dot1 = document.createElementNS(svgNS, 'circle');
+      dot1.setAttribute('cx', 5); dot1.setAttribute('cy', 4); dot1.setAttribute('r', 2);
+      dot1.className.baseVal = 's7-dot';
+      var dot2 = document.createElementNS(svgNS, 'circle');
+      dot2.setAttribute('cx', 5); dot2.setAttribute('cy', 14); dot2.setAttribute('r', 2);
+      dot2.className.baseVal = 's7-dot';
+      g.appendChild(dot1); g.appendChild(dot2);
+    } else {
+      var segs = 'abgfedc';
+      for (var si = 0; si < segs.length; si++) {
+        var s = segs[si];
+        var ln = document.createElementNS(svgNS, 'line');
+        ln.setAttribute('x1', SEG[s].x1); ln.setAttribute('y1', SEG[s].y1);
+        ln.setAttribute('x2', SEG[s].x2); ln.setAttribute('y2', SEG[s].y2);
+        ln.setAttribute('stroke-width', '2');
+        ln.setAttribute('stroke-linecap', 'round');
+        ln.className.baseVal = 's7';
+        ln.setAttribute('data-seg', s);
+        g.appendChild(ln);
+      }
+    }
+    seg7Root.appendChild(g);
+    x += isColon ? 10 : 12;
+  }
+}
+
+function setSeg7(str) {
+  if (!seg7Root) return;
+  var display = (typeof str === 'string' && /^\d{2}:\d{2}:\d{2}$/.test(str)) ? str : '00:00:00';
+  if (display === lastSeg7) return;
+  lastSeg7 = display;
+  var nodes = seg7Root.querySelectorAll('g[data-pos]');
+  var idx = 0;
+  for (var p = 0; p < display.length && idx < nodes.length; p++) {
+    var ch = display[p];
+    var isColon = (ch === ':');
+    var g = nodes[idx++];
+    if (isColon) {
+      var dots = g.querySelectorAll('.s7-dot');
+      dots.forEach(function(d) { d.classList.add('on'); });
+    } else {
+      var on = SEG_ON[ch] || '';
+      var lines = g.querySelectorAll('line.s7');
+      lines.forEach(function(l) {
+        var seg = l.getAttribute('data-seg');
+        l.classList.toggle('on', on.indexOf(seg) >= 0);
+      });
+    }
+  }
+}
+
+// Initialize seg7 on load. This avoids a blank/ghost-only head window before
+// the first WebSocket packet arrives.
+buildSeg7();
+setSeg7('00:00:00');
+
+// ---- Pinned meter footer collapse/expand ----
+var meterFooter = document.getElementById('meterFooter');
+var meterToggle = document.getElementById('meterToggle');
+var meterBody = document.getElementById('meterBody');
+var meterCaret = document.getElementById('meterCaretSvg');
+if (meterToggle && meterFooter && meterBody && meterCaret) {
+  var collapsed = false;
+  try { collapsed = localStorage.getItem('pi9696_meterCollapsed') === '1'; } catch (e) {}
+  var meterOpen = document.getElementById('meterOpen');
+  var meterOpenBtn = document.getElementById('meterOpenBtn');
+  function applyCollapse() {
+    meterFooter.classList.toggle('collapsed', collapsed);
+    if (meterOpen) meterOpen.hidden = !collapsed;
+    if (meterOpenBtn) meterOpenBtn.setAttribute('aria-expanded', !collapsed);
+    meterCaret.style.transform = collapsed ? 'rotate(-90deg)' : '';
+    meterToggle.setAttribute('aria-expanded', !collapsed);
+  }
+  applyCollapse();
+  function toggleMeters() {
+    collapsed = !collapsed;
+    try { localStorage.setItem('pi9696_meterCollapsed', collapsed ? '1' : '0'); } catch (e) {}
+    applyCollapse();
+  }
+  meterToggle.addEventListener('click', toggleMeters);
+  if (meterOpenBtn) meterOpenBtn.addEventListener('click', toggleMeters);
+}
+
+// The meter band is as tall as the header (owner layout): measure the
+// header and the footer and expose them as --deck-h / --footer-h.
+(function() {
+  var deck = document.querySelector('header.deck');
+  var foot = document.getElementById('appFooter');
+  function measure() {
+    var root = document.documentElement.style;
+    if (deck) root.setProperty('--deck-h', deck.offsetHeight + 'px');
+    if (foot) root.setProperty('--footer-h', foot.offsetHeight + 'px');
+  }
+  measure();
+  if (window.ResizeObserver) {
+    var ro = new ResizeObserver(measure);
+    if (deck) ro.observe(deck);
+    if (foot) ro.observe(foot);
+  } else {
+    window.addEventListener('resize', measure);
+  }
+})();
+
+// System pane: pops up above the footer. Hidden charts measure 0 wide, so
+// opening it re-runs the charts' resize.
+(function() {
+  var btn = document.getElementById('sysToggle');
+  var pane = document.getElementById('sysPane');
+  if (!btn || !pane) return;
+  var open = false;
+  try { open = localStorage.getItem('pi9696_sysOpen') === '1'; } catch (e) {}
+  function apply() {
+    pane.hidden = !open;
+    btn.setAttribute('aria-expanded', open);
+    if (open) window.dispatchEvent(new Event('resize'));
+  }
+  apply();
+  btn.addEventListener('click', function() {
+    open = !open;
+    try { localStorage.setItem('pi9696_sysOpen', open ? '1' : '0'); } catch (e) {}
+    apply();
+  });
+})();
+
+// Update meter badge (stereo/dual-mono indicator)
+var meterBadge = document.getElementById('meterBadge');
+
+var chMeters = document.getElementById('chMeters');
+var chCount = -1, chNames = '';
+// ensureChannels builds the meter banks: up to METERS_PER_BANK console
+// strips per bank (ftl-themes .strip: channel number, segmented .meter.meter-v,
+// .scribble with the name), each bank led by its own legend strip. Rebuilt
+// only when the count or the names change.
+var METERS_PER_BANK = 8;
+var LEGEND_STRIP = '<section class="strip strip-legend" aria-hidden="true"><span class="strip-num">&nbsp;</span>' +
+  '<div class="strip-fader"><div class="scale is-meter"></div></div><div class="scribble"><span class="scribble-name">dBFS</span></div></section>';
+function ensureChannels(n, names) {
+  var key = (names || []).join('\u0000');
+  if (n === chCount && key === chNames) return;
+  chMeters.innerHTML = '';
+  var row = null;
+  for (var i = 1; i <= n; i++) {
+    if ((i - 1) % METERS_PER_BANK === 0) {
+      row = document.createElement('div');
+      row.className = 'mixer meter-group';
+      row.innerHTML = LEGEND_STRIP;
+      chMeters.appendChild(row);
+    }
+    var name = (names && names[i - 1]) || ('RX ' + i);
+    var strip = document.createElement('section');
+    strip.className = 'strip';
+    strip.innerHTML = '<span class="strip-num"></span>' +
+      '<div class="strip-fader"><div class="meter meter-v is-segmented" role="meter" aria-valuemin="' + FLOOR + '" aria-valuemax="0" aria-valuenow="' + FLOOR + '"><div class="meter-fill" data-i="' + i + '"></div><div class="meter-peak"></div><div class="meter-hold"></div></div></div>' +
+      '<div class="scribble"><span class="scribble-name"></span></div>';
+    strip.querySelector('.meter').setAttribute('aria-label', 'Channel ' + i + ' ' + name + ' level, dBFS');
+    strip.querySelector('.strip-num').textContent = i;
+    var nameEl = strip.querySelector('.scribble-name');
+    nameEl.textContent = name;
+    nameEl.title = name + ' - double-click to rename';
+    nameEl.tabIndex = 0;
+    nameEl.dataset.ch = i;
+    row.appendChild(strip);
+  }
+  chCount = n;
+  chNames = key;
+  scaleFloor = null; // the new rows' legends are empty
+}
+
+// Double-click a channel's name to relabel it (Enter or F2 from the
+// keyboard): Enter saves, Escape cancels, an empty name goes back to
+// inferno's name. Owner rule: this is the unit's own label (POST
+// /api/channels/label) - inferno's channel names are never changed.
+function editChannelLabel(nameEl) {
+  if (!nameEl || nameEl.parentNode.querySelector('input')) return;
+  var ch = nameEl.dataset.ch;
+  var old = nameEl.textContent;
+  var input = document.createElement('input');
+  input.className = 'input chan-label-input';
+  input.value = old;
+  input.maxLength = 32;
+  input.setAttribute('aria-label', 'Name for channel ' + ch + ' (empty: the inferno name)');
+  // On the .scribble, not in the name: the name clips its overflow.
+  nameEl.style.visibility = 'hidden';
+  nameEl.parentNode.appendChild(input);
+  input.focus();
+  input.select();
+  var done = false;
+  function finish(save) {
+    if (done) return;
+    done = true;
+    var v = input.value.trim();
+    input.remove();
+    nameEl.style.visibility = '';
+    nameEl.focus();
+    if (!save || v === old) return;
+    nameEl.textContent = v || old;
+    fetch('/api/channels/label', { method: 'POST', body: new URLSearchParams({ channel: ch, name: v }) })
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(j) {
+        nameEl.textContent = j ? j.name : old;
+        if (j) chNames = ''; // rebuild the strips with the new names on the next tick
+      })
+      .catch(function() { nameEl.textContent = old; });
+  }
+  input.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+    e.stopPropagation();
+  });
+  input.addEventListener('blur', function() { finish(true); });
+}
+chMeters.addEventListener('dblclick', function(ev) {
+  editChannelLabel(ev.target.closest('.strip:not(.strip-legend) .scribble-name'));
+});
+chMeters.addEventListener('keydown', function(ev) {
+  if ((ev.key === 'Enter' || ev.key === 'F2') && ev.target.matches('.scribble-name')) {
+    ev.preventDefault();
+    editChannelLabel(ev.target);
+  }
+});
+
+// Timecode readouts: the deck line, the Status row and the chase button.
+var chaseArmed = false;
+function applyTimecode(tc) {
+  if (!tc) return;
+  var line = tc.source === 'Off' ? '' : ('TC IN ' + tc.in.replace(/^(LTC|MTC) /, '$1 ') + (tc.out ? '  OUT ' + tc.out : ''));
+  var t = document.getElementById('tcText');
+  if (t && t.textContent !== line) t.textContent = line;
+  var st = document.getElementById('tcstatus');
+  var long = tc.inLong + (tc.out ? ' · out ' + tc.out : '') + (tc.peers ? ' · ' + tc.peers : '');
+  if (st && st.textContent !== long) st.textContent = long;
+  chaseArmed = !!tc.armed;
+  var b = document.getElementById('chaseBtn');
+  if (b) {
+    var label = chaseArmed ? 'Disarm Chase' : 'Arm Timecode Chase';
+    if (b.textContent !== label) b.textContent = label;
+    b.disabled = tc.source === 'Off' && !chaseArmed;
+  }
+  var cs = document.getElementById('chaseState');
+  var cl = chaseArmed ? (tc.take + ': ' + tc.chase) : '';
+  if (cs && cs.textContent !== cl) cs.textContent = cl;
+}
+function toggleChase() {
+  var body = new URLSearchParams({arm: chaseArmed ? '0' : '1'});
+  fetch('/api/timecode/arm', {method: 'POST', body: body, headers: {'Content-Type': 'application/x-www-form-urlencoded'}});
+}
+
+function applyMeter(m) {
+  FLOOR = m.floorDB;
+
+  // OLED mirror: reload only when the panel framebuffer actually changed.
+  if (m.displaySeq !== oledSeq) {
+    oledSeq = m.displaySeq;
+    document.getElementById('oled').src = '/api/display.png?t=' + Date.now();
+  }
+
+  // inferno TX state rides the same tick: clock loss shows without refresh.
+  var txEl = document.getElementById('txstatus');
+  if (txEl && typeof m.txShort === 'string' && txEl.textContent !== m.txShort) {
+    txEl.textContent = m.txShort;
+  }
+
+  applyTimecode(m.timecode);
+
+  var paused = !!m.paused;
+  // Reels and the tape-path pulse stop moving while paused (frozen transport)
+  // but the head display still shows the frozen elapsed time rather than
+  // going blank.
+  var moving = m.recording || m.playing;
+  var showing = m.recording || m.playing || paused;
+  setSeg7(showing ? m.elapsed : null);
+
+  // The deck (ftl-themes .media-deck) takes one state class and draws the
+  // rest: reels and tape move while recording or playing, the head gap and
+  // transport lamp go red while recording, green while playing; paused
+  // holds still.
+  var deck = document.getElementById('deck');
+  if (deck) {
+    deck.classList.toggle('is-recording', !!m.recording);
+    deck.classList.toggle('is-playing', !!m.playing && !m.recording);
+    deck.classList.toggle('is-paused', paused);
+  }
+  var linkLamp = document.getElementById('linkLamp');
+  if (linkLamp) linkLamp.classList.toggle('on', !!m.infernoUp);
+
+  // Rebuild the transport row only when the play/pause state actually flips,
+  // so the play triangle toggles to a pause glyph exactly when the state does.
+  var next = { playing: !!m.playing, paused: paused, rec: !!m.recording };
+  if (next.playing !== transportState.playing || next.paused !== transportState.paused || next.rec !== transportState.rec) {
+    transportState = next;
+    renderTransportRow();
+  }
+
+  var channels = Array.isArray(m.channels) ? m.channels : [];
+  ensureChannels(channels.length, m.channelNames);
+  rebuildDbScale(m.floorDB);
+  channels.forEach(function(c, idx) {
+    var i = idx + 1;
+    // ftl-themes' .meter contract: level and peak are custom properties
+    // on the .meter itself, read by its .meter-fill and .meter-peak.
+    var fill = chMeters.querySelector('.meter-fill[data-i="' + i + '"]');
+    var track = fill && fill.parentNode;
+    if (track) {
+      track.style.setProperty('--meter-level', vuPct(c.rmsDB) + '%');
+      track.style.setProperty('--meter-peak', vuPct(c.peakDB) + '%');
+      // Peak hold: its own bar, coloured by the zone it sits in.
+      var hold = typeof c.holdDB === 'number' ? c.holdDB : c.peakDB;
+      track.style.setProperty('--meter-hold', vuPct(hold) + '%');
+      track.dataset.hold = hold > -6 ? 'high' : (hold > -18 ? 'mid' : (hold > FLOOR ? 'low' : 'off'));
+      var now = String(Math.round(Math.max(c.rmsDB, FLOOR)));
+      if (track.getAttribute('aria-valuenow') !== now) track.setAttribute('aria-valuenow', now);
+    }
+  });
+
+  // Meter footer badge: stereo/dual-mono indicator
+  if (meterBadge) {
+    meterBadge.textContent = channels.length === 2 ? 'STEREO' : (channels.length === 1 ? 'MONO' : channels.length + 'CH');
+  }
+}
+
+// WebSocket push instead of polling /api/meter: the server streams a
+// snapshot every 100ms (see handleWSMeter) over one persistent connection
+// rather than the dashboard opening a new HTTP request per tick. If the
+// socket drops it reconnects after a second; there is no polling fallback.
+function connectMeterSocket() {
+  var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  var ws = new WebSocket(proto + '//' + location.host + '/ws/meter');
+  ws.onmessage = function(ev) { applyMeter(JSON.parse(ev.data)); };
+  // A 401-capable world (see requireAuth): an expired session now fails the
+  // handshake instead of spinning reconnects forever - check once and offer
+  // the login page rather than a dead red lamp.
+  ws.onclose = function() {
+    fetch('/api/status').then(function(r) {
+      if (r.status === 401) { location.href = '/login'; return; }
+      setTimeout(connectMeterSocket, 1000);
+    }).catch(function() { setTimeout(connectMeterSocket, 1000); });
+  };
+  ws.onerror = function() { ws.close(); };
+}
+// System graphs: uPlot history driven by the hx-ws telemetry socket (see
+// #teleSock), not by polling - the server pushes a status swap plus a
+// history JSON swap every 2s, and applyTeleHist redraws from the swap.
+// Charts appear once 2+ samples exist. Missing uPlot file degrades to the
+// collecting placeholder.
+var teleCPU = null, teleRAM = null, teleTemp = null, teleDisk = null, teleSub = null;
+// teleCSS reads a bridge token's resolved value so charts follow the active
+// theme (none-case: the :root literal; themed: the theme's value through the
+// bridge). Falls back to the literal when tokens are unavailable.
+function teleCSS(name, fallback) {
+  try {
+    var v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return v || fallback;
+  } catch (e) { return fallback; }
+}
+var telePalette = null; // built lazily at chart init, after styles resolve
+function telePaletteInit() {
+  if (!telePalette) telePalette = [
+    teleCSS('--chart-series-1', teleCSS('--glow', '#00d9ff')),
+    teleCSS('--chart-series-2', teleCSS('--idle', '#2bffb0')),
+    teleCSS('--chart-series-3', teleCSS('--orange', '#ff8c1a')),
+    teleCSS('--chart-series-4', teleCSS('--rec', '#ff3355')),
+    teleCSS('--chart-series-5', teleCSS('--dim', '#5b8aa8')),
+    teleCSS('--chart-series-6', teleCSS('--text', '#cfeeff'))
+  ];
+  return telePalette;
+}
+// uPlot's built-in time axis is 12h + am/pm; the unit standard is 24h.
+function teleTimeValues(self, ticks) {
+  function p(n) { return (n < 10 ? '0' : '') + n; }
+  return ticks.map(function(t) {
+    var d = new Date(t * 1000);
+    return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+  });
+}
+// Graph heights, ~25% taller than the old side column (90/56 px) now that
+// the System pane spans the page width.
+var TELE_H = 112, TELE_H_SMALL = 70;
+function teleOpts(extraSeries, ymin, ymax, h) {
+  var dim = teleCSS('--dim', '#5b8aa8');
+  var font = '9px ' + teleCSS('--font', 'Consolas,monospace');
+  var o = {
+    width: 300, height: h || TELE_H,
+    series: [{}].concat(extraSeries),
+    cursor: {show: false},
+    legend: {show: true},
+    axes: [
+      {stroke: dim, font: font, grid: {stroke: 'rgba(0,217,255,0.12)', width: 1}, values: teleTimeValues},
+      {stroke: dim, font: font, grid: {stroke: 'rgba(0,217,255,0.12)', width: 1}}
+    ]
+  };
+  if (ymin !== null) o.scales = {y: {range: [ymin, ymax]}};
+  return o;
+}
+function teleWidth(el) {
+  var w = el.clientWidth || 300;
+  return w > 0 ? w : 300;
+}
+function teleSize(chart, el, h) {
+  if (chart) chart.setSize({width: teleWidth(el), height: h});
+}
+function initTeleCharts(ncores, subNames) {
+  var cpuEl = document.getElementById('cpuChart');
+  var subEl = document.getElementById('subChart');
+  var ramEl = document.getElementById('ramChart');
+  var tempEl = document.getElementById('tempChart');
+  var diskEl = document.getElementById('diskChart');
+  if (!cpuEl || !ramEl || !tempEl || !diskEl) return false;
+  cpuEl.innerHTML = ''; ramEl.innerHTML = ''; tempEl.innerHTML = ''; diskEl.innerHTML = '';
+  var cpuSeries = [];
+  var pal = telePaletteInit();
+  for (var i = 0; i < ncores; i++) {
+    cpuSeries.push({label: 'CPU' + i, stroke: pal[i % pal.length], width: 1.5});
+  }
+  var dummy = [[0, 1]];
+  for (var i = 0; i < ncores; i++) dummy.push([0, 0]);
+  teleCPU = new uPlot(teleOpts(cpuSeries, 0, 100, TELE_H), dummy, cpuEl);
+  if (subEl) {
+    subEl.innerHTML = '';
+    var subSeries = [], subDummy = [[0, 1]];
+    (subNames || []).forEach(function(n, i) {
+      subSeries.push({label: n, stroke: pal[i % pal.length], width: 1.5, dash: i >= pal.length ? [4, 3] : undefined});
+      subDummy.push([0, 0]);
+    });
+    teleSub = new uPlot(teleOpts(subSeries, 0, null, TELE_H), subDummy, subEl);
+    teleSize(teleSub, subEl, TELE_H);
+  }
+  teleRAM = new uPlot(teleOpts([
+    {label: 'App MB', stroke: pal[0], width: 1.5, fill: 'rgba(0,217,255,0.10)'},
+    {label: 'Sys MB', stroke: pal[2], width: 1.5}
+  ], null, null, TELE_H), [[0, 1], [0, 0], [0, 0]], ramEl);
+  teleTemp = new uPlot(teleOpts([{label: 'Temp C', stroke: pal[2], width: 1.5}], null, null, TELE_H_SMALL), [[0, 1], [0, 0]], tempEl);
+  teleDisk = new uPlot(teleOpts([{label: 'Free GB', stroke: pal[1], width: 1.5}], 0, null, TELE_H_SMALL), [[0, 1], [0, 0]], diskEl);
+  teleSize(teleCPU, cpuEl, TELE_H); teleSize(teleRAM, ramEl, TELE_H);
+  teleSize(teleTemp, tempEl, TELE_H_SMALL); teleSize(teleDisk, diskEl, TELE_H_SMALL);
+  // Armed once: every re-init (core-count change, theme switch) would
+  // otherwise stack another resize listener and run setSize N times.
+  if (!window.teleResizeArmed) {
+    window.teleResizeArmed = true;
+    window.addEventListener('resize', function() {
+      teleSize(teleCPU, document.getElementById('cpuChart'), TELE_H);
+      teleSize(teleSub, document.getElementById('subChart'), TELE_H);
+      teleSize(teleRAM, document.getElementById('ramChart'), TELE_H);
+      teleSize(teleTemp, document.getElementById('tempChart'), TELE_H_SMALL);
+      teleSize(teleDisk, document.getElementById('diskChart'), TELE_H_SMALL);
+    });
+  }
+  return true;
+}
+// Hidden tabs skip redraws (item: don't burn cycles on an unseen panel);
+// the latest payload is applied on return.
+var teleHidden = document.hidden, telePending = null;
+document.addEventListener('visibilitychange', function() {
+  teleHidden = document.hidden;
+  if (!teleHidden && telePending) { var h = telePending; telePending = null; applyTeleHist(h); }
+});
+function applyTeleHist(h) {
+  if (!window.uPlot || !h || !h.t || h.t.length < 2) return;
+  var ncores = (h.cores && h.cores.length > 0 && h.cores[0]) ? h.cores[0].length : 0;
+  // Core count can only change across reboots; rebuild charts if it did.
+  var subNames = h.subNames || [];
+  if (!teleCPU && !initTeleCharts(ncores, subNames)) return;
+  if (teleCPU && (teleCPU.series.length - 1 !== ncores || (teleSub && teleSub.series.length - 1 !== subNames.length))) {
+    teleCPU = null; teleRAM = null; teleTemp = null; teleDisk = null; teleSub = null;
+    if (!initTeleCharts(ncores, subNames)) return;
+  }
+  var cols = [h.t];
+  for (var i = 0; i < ncores; i++) {
+    cols.push(h.cores.map(function(row) { return (row && i < row.length) ? row[i] : null; }));
+  }
+  teleCPU.setData(cols);
+  if (teleSub && h.sub) {
+    var scols = [h.t];
+    for (var j = 0; j < subNames.length; j++) {
+      scols.push(h.sub.map(function(row) { return (row && j < row.length) ? Math.round(row[j] * 10) / 10 : null; }));
+    }
+    teleSub.setData(scols);
+  }
+  teleRAM.setData([h.t, h.ramApp, h.ramSys]);
+  if (h.temp) teleTemp.setData([h.t, h.temp]);
+  if (h.disk) teleDisk.setData([h.t, h.disk]);
+}
+document.body.addEventListener('htmx:after:swap', function(e) {
+  // WS-driven swaps carry no detail.target (htmx 4 shape is {ctx,
+  // cancelled}) - the swapped selector lives on detail.ctx.target as a
+  // string like "#teleHist", while plain swaps still use detail.target.
+  var d = e.detail || {}, t = d.target || (d.ctx && d.ctx.target);
+  var id = t && (t.id || t);
+  if (id === 'teleHist' || id === '#teleHist') {
+    var raw = document.getElementById('teleHist').textContent;
+    if (teleHidden) { telePending = raw; return; }
+    try { applyTeleHist(JSON.parse(raw)); } catch (err) {}
+  }
+});
+// Conn lamp: blue while the telemetry socket pushes, error red while the
+// server is unreachable. hx-ws fires on the socket element; listen there
+// and on document in case the bundle retargets.
+function setConnLamp(on) {
+  var lamp = document.getElementById('connLamp');
+  if (!lamp) return;
+  var bulb = lamp.querySelector('.lamp');
+  if (bulb) { bulb.classList.toggle('is-on', !!on); bulb.classList.toggle('is-error', !on); }
+  lamp.title = on ? 'Server connected' : 'Server disconnected';
+  lamp.setAttribute('aria-label', lamp.title);
+}
+function watchConnLamp(el) {
+  if (!el || !el.addEventListener) return;
+  el.addEventListener('htmx:ws:after:connection', function() { setConnLamp(true); });
+  el.addEventListener('htmx:ws:close', function() { setConnLamp(false); });
+  el.addEventListener('htmx:ws:error', function() { setConnLamp(false); });
+}
+watchConnLamp(document);
+watchConnLamp(document.getElementById('teleSock'));
+// OLED mirror reloads on framebuffer generation change (see displaySeq),
+// not on a blind interval.
+var oledSeq = -1;
+connectMeterSocket();
+</script>
+</body></html>
+{{define "settingsPanes"}}      <div class="settings-panes scroll" id="settingsPanes">
+      <section class="settings-group field-group settings-pane is-active" role="tabpanel" aria-labelledby="tab-device" id="pane-device">
+        {{.DeviceNameFragment}}
+      </section>
+
+      <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-audio" id="pane-audio">
+        {{.SampleRateFragment}}
+        {{.ChannelCountFragment}}
+        {{.RxLatencyFragment}}
+        {{.MonitorFragment}}
+      </section>
+
+      <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-metering" id="pane-metering">
+        {{.VURangeFragment}}
+        {{.PeakHoldFragment}}
+      </section>
+
+      <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-metadata" id="pane-metadata">
+        {{.PrefixFragment}}
+        {{.TagFragment}}
+      </section>
+
+      <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-transport" id="pane-transport">
+        {{.TransportFragment}}
+        {{.HyperdeckFragment}}
+      </section>
+
+      <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-display" id="pane-display">
+        {{.ThemeFragment}}
+        {{.TintFragment}}
+        {{.MotionFragment}}
+        {{.ContrastFragment}}
+        {{.DensityFragment}}
+        {{.BrightnessFragment}}
+        {{.AutoDimFragment}}
+      </section>
+
+      <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-timecode" id="pane-timecode">
+        {{.TimecodeFragment}}
+      </section>
+
+      <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-demo" id="pane-demo">
+        {{.DemoFragment}}
+      </section>
+
+      <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-logging" id="pane-logging">
+        {{.LogLevelFragment}}
+      </section>
+
+      <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-config" id="pane-config">
+        <div class="field-row field-row--pair">
+          <button hx-post="/api/config/export" hx-target="#config-msg" class="btn btn-secondary">Export to USB</button>
+          <button hx-post="/api/config/import" hx-target="#config-msg" class="btn btn-secondary">Import from USB</button>
+        </div>
+        <div class="field-row" id="config-msg"></div>
+      </section>
+
+      <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-network" id="pane-network">
+        <div id="wifi-settings">
+          {{.WifiQRFragment}}
+          <form hx-post="/api/settings/wifi" hx-target="#wifiqr" hx-swap="outerHTML" hx-status:400="target:#wifi-error">
+            <div class="field-row field-row--pair">
+              <span class="field">
+                <label for="wifiSsid">SSID</label>
+                <input id="wifiSsid" class="input" name="ssid" value="{{.WifiSSID}}" maxlength="32" required>
+              </span>
+              <span class="field">
+                <label for="wifiPass">Password</label>
+                <input id="wifiPass" class="input" name="password" type="password" value="{{.WifiPassword}}" minlength="8" maxlength="63" required>
+              </span>
+            </div>
+            <div class="field-row">
+              <label class="label" for="wifiEnabled">Access Point</label>
+              <label class="switch" for="wifiEnabled">
+                <input id="wifiEnabled" name="enabled" type="checkbox" {{if .WifiEnabled}}checked{{end}}>
+                <span class="switch-track"><span class="switch-thumb"></span></span>
+                <span class="switch-readout" data-on="ONLINE" data-off="OFFLINE"></span>
+              </label>
+            </div>
+            <button type="submit" class="btn btn-secondary">Save WiFi</button>
+          </form>
+          <div id="wifi-error"></div>
+        </div>
+      </section>
+      </div>{{end}}
