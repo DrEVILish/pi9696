@@ -1,0 +1,12 @@
+[Unit]
+Description=PI9696 USB drive /dev/%I at /media/usb
+# Started by deploy/99-pi9696-usb.rules; stops (and unmounts) when the drive
+# is pulled.
+BindsTo=dev-%i.device
+After=dev-%i.device
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh __PI9696_DIR__/deploy/pi9696-usb.sh start %I
+ExecStop=/bin/sh __PI9696_DIR__/deploy/pi9696-usb.sh stop %I

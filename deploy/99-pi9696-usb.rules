@@ -1,0 +1,4 @@
+# Mount USB drives at /media/usb for the recorder (copy, format, config
+# export/import). Matches the node carrying the filesystem: a partition, or
+# the whole disk on a stick without a partition table.
+ACTION=="add", SUBSYSTEM=="block", SUBSYSTEMS=="usb", ENV{ID_FS_USAGE}=="filesystem", TAG+="systemd", ENV{SYSTEMD_WANTS}+="pi9696-usb@%k.service"

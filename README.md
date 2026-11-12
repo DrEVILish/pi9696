@@ -248,6 +248,10 @@ Settings → Timecode on the panel and the Timecode pane of the dashboard.
 
 ### Files and USB
 
+- A USB drive mounts at `/media/usb` when plugged in (udev rule +
+  `pi9696-usb@.service`) and unmounts when pulled. One drive at a time; a
+  partition on a disk the system is using (a USB-booted root SSD) is never
+  mounted, so Format cannot reach it.
 - Copy selected/all takes to USB (per-day folders), delete with confirmation,
   format a USB drive (exFAT, FAT32 fallback with a 4 GB file-limit notice).
 - WebUI: per-file download and Download ALL as a streaming ZIP with a manifest.
@@ -385,7 +389,8 @@ hyperdeck.go      Blackmagic HyperDeck server (TCP 9993)
 logging.go        log/slog (stderr + app.log)
 hardware/         SSD1322 display, encoder, buttons, lamps, network detection
 alsapcm/          cgo ALSA wrapper
-deploy/           systemd units, statime.toml, asound.conf, hostapd drop-in
+deploy/           systemd units, statime.toml, asound.conf, hostapd drop-in,
+                  USB automount (udev rule, pi9696-usb@.service, pi9696-usb.sh)
 docs/install.sh   the installer (served by GitHub Pages)
 test/             gotest.sh, ui/ (Playwright), interop/ (two-host checks)
 third_party/      ftl-themes (submodule)

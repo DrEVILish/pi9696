@@ -235,9 +235,13 @@ configure() {
   fi
   install -m 0644 "$DIR/deploy/pi9696.logrotate" /etc/logrotate.d/pi9696
   local unit
-  for unit in pi9696 statime pi9696-clock; do
+  for unit in pi9696 statime pi9696-clock pi9696-usb@; do
     sed -e "s|__PI9696_DIR__|$DIR|g" "$DIR/deploy/$unit.service" >"/etc/systemd/system/$unit.service"
   done
+  # USB drives mount at /media/usb on plug-in (a drive already in takes
+  # effect after a replug or the next boot).
+  install -m 0644 "$DIR/deploy/99-pi9696-usb.rules" /etc/udev/rules.d/99-pi9696-usb.rules
+  udevadm control --reload
   # Wi-Fi access point: off until enabled in the WebUI or on the panel.
   install -D -m 0644 "$DIR/deploy/hostapd-pi9696.conf" /etc/systemd/system/hostapd.service.d/pi9696.conf
   systemctl unmask hostapd >/dev/null 2>&1 || true
