@@ -1,0 +1,30 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: true # third_party/ftl-themes, embedded by remote.go
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: System packages
+        run: sudo apt-get update -q && sudo apt-get install -yq libasound2-dev ffmpeg
+      - name: Web assets
+        # The pinned list in install.sh is the one source of URLs and
+        # checksums; go:embed needs the files to build.
+        run: |
+          eval "$(sed -n '/^WEB_ASSETS=(/,/^)/p' docs/install.sh)"
+          for entry in "${WEB_ASSETS[@]}"; do
+            IFS='|' read -r name url sum <<<"$entry"
+            curl -fsSL -o "web/$name" "$url"
+            echo "$sum  web/$name" | sha256sum -c -
+          done
+      - name: vet + race suite
+        run: test/gotest.sh
