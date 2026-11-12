@@ -4878,6 +4878,65 @@ func TestPanelSkipsRecordingsRenderWhenSetUnchanged(t *testing.T) {
 	}
 }
 
+// A take being written grows its file without touching any directory mtime,
+// so the take-set fingerprint alone froze the live row's duration. While a
+// take is live the panel must re-render every push, and once more after it
+// ends.
+func TestPanelRendersLiveTakeEveryPush(t *testing.T) {
+	initTestHardware(t)
+	origRecs, origKey, origCfg := lastPanelRecs, lastPanelRecsKey, lastPanelConfig
+	origLive := takeLive.Load()
+	t.Cleanup(func() {
+		takeLive.Store(origLive)
+		teleWSMu.Lock()
+		lastPanelRecs, lastPanelRecsKey, lastPanelConfig = origRecs, origKey, origCfg
+		teleWSMu.Unlock()
+	})
+	teleWSMu.Lock()
+	lastPanelRecs, lastPanelRecsKey, lastPanelConfig = "", "", ""
+	teleWSMu.Unlock()
+
+	take := filepath.Join(RecordPath, "live_20260101_120000_ch2_48kHz.wav")
+	t.Cleanup(func() { os.Remove(take) })
+	const secBytes = 2 * 3 * 48000 // 2 ch, 24-bit, 48 kHz
+	stDir, err := os.Stat(RecordPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// grow writes a take of n seconds (no WAV header: the size estimate
+	// applies) and pins the directory mtime the fingerprint reads.
+	grow := func(n int) {
+		if err := os.WriteFile(take, make([]byte, 44+n*secBytes), 0644); err != nil {
+			t.Fatal(err)
+		}
+		os.Chtimes(RecordPath, stDir.ModTime(), stDir.ModTime())
+	}
+	push := func() string {
+		teleWSMu.Lock()
+		defer teleWSMu.Unlock()
+		_, recs, _, _ := panelWSMessages()
+		return recs
+	}
+
+	takeLive.Store(true)
+	grow(1)
+	one := push()
+	grow(2)
+	if two := push(); two == one {
+		t.Fatal("live take's row did not re-render as the file grew")
+	}
+	takeLive.Store(false)
+	grow(3)
+	three := push()
+	if !strings.Contains(three, formatDuration(3*time.Second)) {
+		t.Fatalf("no final render after the take ended; want %s in:\n%s", formatDuration(3*time.Second), three)
+	}
+	grow(4)
+	if four := push(); four != three {
+		t.Error("idle panel re-rendered with an unchanged take set")
+	}
+}
+
 // A broadcast round with no clients must be a fast no-op: it exercises the
 // snapshot-then-send restructure (client-set snapshot under lock, sends
 // outside it) without needing any sockets.

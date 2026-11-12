@@ -3945,20 +3945,24 @@ func panelWSMessages() (config, recs string, configChanged, recsChanged bool) {
 	// set from directory mtimes - the same key recordingFiles() itself
 	// trusts for cache invalidation, so this is exactly as fresh as the
 	// data source (and shares its documented blind spot: in-place content
-	// edits without mtime change). An active take grows its file, which
-	// bumps the day-dir mtime, so live durations keep flowing.
+	// edits without mtime change). That blind spot includes a take being
+	// written: appending to a file leaves its directory's mtime alone, so
+	// the live row's duration froze. A live take therefore never skips, and
+	// the flag is in the key so the row renders once more after Stop.
 	// The playback selection is part of the key: it marks a row.
 	mutex.Lock()
 	sel := selectedPlayback
 	mutex.Unlock()
-	if recKey, ok := recordingFilesKey(); ok && recKey+"|"+sel == lastPanelRecsKey && lastPanelRecsKey != "" {
+	live := takeLive.Load()
+	suffix := fmt.Sprintf("|%s|%t", sel, live)
+	if recKey, ok := recordingFilesKey(); ok && !live && recKey+suffix == lastPanelRecsKey && lastPanelRecsKey != "" {
 		return config, lastPanelRecs, configChanged, false
 	}
 	if r, err := renderRecordingsHTMLLimit(latestRecsPushCap); err == nil {
 		recs, recsChanged = r, r != lastPanelRecs
 		lastPanelRecs = r
 		if key, ok := recordingFilesKey(); ok {
-			lastPanelRecsKey = key + "|" + sel
+			lastPanelRecsKey = key + suffix
 		}
 	}
 	return config, recs, configChanged, recsChanged
