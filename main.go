@@ -3812,13 +3812,21 @@ func latestRecording() string {
 	if len(files) == 0 {
 		return ""
 	}
+	// One Stat per take, not two per comparison. A take that cannot be
+	// stat'd keeps the zero time and compares by name.
+	mod := make(map[string]time.Time, len(files))
+	for _, f := range files {
+		if fi, err := os.Stat(f); err == nil {
+			mod[f] = fi.ModTime()
+		}
+	}
 	sort.Slice(files, func(i, j int) bool {
-		fi, errI := os.Stat(files[i])
-		fj, errJ := os.Stat(files[j])
-		if errI != nil || errJ != nil {
+		ti, okI := mod[files[i]]
+		tj, okJ := mod[files[j]]
+		if !okI || !okJ {
 			return files[i] < files[j]
 		}
-		return fi.ModTime().Before(fj.ModTime())
+		return ti.Before(tj)
 	})
 	return files[len(files)-1]
 }
