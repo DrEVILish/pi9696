@@ -69,7 +69,7 @@ What gets installed:
 | Format | WAV PCM 24-bit (32-bit internal), `-rf64 auto`: a take past 4 GiB is finalised as RF64 |
 | Files | `/rec/YYYY-MM-DD/prefix_YYYYMMDD_HHMMSS_chN_NNkHz.wav` (+ `.channels.json` sidecar), about 17.3 MB/min at 48 kHz stereo |
 | Remote | HTTP (token + session auth, no HTTPS), port from `PI9696_REMOTE_PORT` (installer default 80, app default 8080) |
-| Deck control | Blackmagic HyperDeck protocol on TCP 9993 (Settings → Transport, default off, no auth) |
+| Deck control | Blackmagic HyperDeck protocol on TCP 9993 (Settings → Transport, default off, no auth); `goto: clip id: N` loads take N of `clips get` for the next play |
 | Logging | Error/Warn/Info/Debug (default Error), journald + `/var/log/pi9696/app.log` |
 
 ---

@@ -435,8 +435,32 @@ func (h *hyperdeckConn) dispatch(line string) bool {
 			h.fail(103, "not playing")
 		}
 	case "goto":
-		// Only rewind-to-top is mappable: the unit plays whole takes, not
-		// clip timelines, so any other goto target is unsupported.
+		// clip id selects take N (1-based, as in clips get) for the next
+		// Play, like the WebUI's load button. Rewind-to-top is the only
+		// timeline target: the unit plays whole takes, so others are
+		// unsupported.
+		if v, ok := params["clip id"]; ok {
+			n, err := strconv.Atoi(strings.TrimSpace(v))
+			mutex.Lock()
+			files := recordingFiles()
+			if err != nil || n < 1 || n > len(files) {
+				mutex.Unlock()
+				h.fail(102, "invalid value")
+				return true
+			}
+			f := files[n-1]
+			if isRecording && f == recordingFile {
+				mutex.Unlock()
+				h.fail(103, "clip is being recorded")
+				return true
+			}
+			selectedPlayback = f
+			mutex.Unlock()
+			logInfof("Playback take selected via HyperDeck: %s", filepath.Base(f))
+			h.ok()
+			h.afterChange()
+			return true
+		}
 		if t, ok := params["timeline"]; ok && strings.TrimSpace(t) == "0" {
 			if hyperdeckWhenSeekable(func() { restartPlaybackAt(0) }) {
 				h.ok()
@@ -634,7 +658,8 @@ func hyperdeckStatusLocked() (string, int) {
 }
 
 // hyperdeckClipIDLocked is the active take's clip id - its 1-based position
-// in the recordings list, matching clips get - or "none" at idle; caller
+// in the recordings list, matching clips get - else the selected take's, or
+// "none"; caller
 // holds the app mutex.
 func hyperdeckClipIDLocked() string {
 	files := recordingFiles()
@@ -649,9 +674,15 @@ func hyperdeckClipIDLocked() string {
 		}
 		return strconv.Itoa(len(files) + 1)
 	}
-	if playbackFile != "" {
+	// Stopped, a chosen take (goto clip id, WebUI load) is what Play starts;
+	// playbackFile keeps the last played take after it ends.
+	want := playbackFile
+	if selectedPlayback != "" && currentState != StatePlaying && currentState != StatePaused {
+		want = selectedPlayback
+	}
+	if want != "" {
 		for i, f := range files {
-			if f == playbackFile {
+			if f == want {
 				return strconv.Itoa(i + 1)
 			}
 		}
