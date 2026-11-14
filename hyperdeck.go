@@ -440,9 +440,22 @@ func (h *hyperdeckConn) dispatch(line string) bool {
 		// timeline target: the unit plays whole takes, so others are
 		// unsupported.
 		if v, ok := params["clip id"]; ok {
-			n, err := strconv.Atoi(strings.TrimSpace(v))
+			v = strings.TrimSpace(v)
+			n, err := strconv.Atoi(v)
 			mutex.Lock()
 			files := recordingFiles()
+			if err == nil && (v[0] == '+' || v[0] == '-') {
+				// Relative step (+1 next, -1 previous) from the current
+				// clip; with none, +1 is the first take and -1 the last.
+				cur, cerr := strconv.Atoi(hyperdeckClipIDLocked())
+				if cerr != nil {
+					cur = 0
+					if n < 0 {
+						cur = len(files) + 1
+					}
+				}
+				n += cur
+			}
 			if err != nil || n < 1 || n > len(files) {
 				mutex.Unlock()
 				h.fail(102, "invalid value")
@@ -504,6 +517,22 @@ func (h *hyperdeckConn) dispatch(line string) bool {
 				hyperdeckTimecode(0), hyperdeckTimecode(playbackFileDuration(f))))
 		}
 		h.block(205, "clips info", lines)
+	case "disk list":
+		// 206 disk list: the same takes and ids as clips get, as
+		// "{id}: {name} {format} {duration}" lines.
+		if hyperdeckIntParam(params, "slot id", 1) != 1 {
+			h.fail(102, "invalid value")
+			return true
+		}
+		mutex.Lock()
+		files := recordingFiles()
+		mutex.Unlock()
+		lines := []string{"slot id: 1"}
+		for i, f := range files {
+			lines = append(lines, fmt.Sprintf("%d: %s WAV %s", i+1, filepath.Base(f),
+				hyperdeckTimecode(playbackFileDuration(f))))
+		}
+		h.block(206, "disk list", lines)
 	case "slot select":
 		if hyperdeckIntParam(params, "slot id", 1) == 1 {
 			h.ok()
@@ -635,7 +664,7 @@ func hyperdeckKnownVerb(verb string) bool {
 	switch verb {
 	case "preview", "playrange", "play option", "play on startup",
 		"record spill", "spill order", "clips clear", "clips rebuild",
-		"clip info", "disk list", "cache info", "configuration",
+		"clip info", "cache info", "configuration",
 		"remote", "watchdog", "slot unblock", "format", "identify":
 		return true
 	}
