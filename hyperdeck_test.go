@@ -187,8 +187,11 @@ func TestHyperdeckProtocolSmoke(t *testing.T) {
 	if first, _ := hyperdeckCmd(t, sc, c, "goto: timeline: 0"); !strings.HasPrefix(first, "103") {
 		t.Errorf("idle goto-top = %q, want 103", first)
 	}
-	if first, _ := hyperdeckCmd(t, sc, c, "goto: clip id: 3"); !strings.HasPrefix(first, "103") {
-		t.Errorf("goto clip = %q, want 103", first)
+	if first, _ := hyperdeckCmd(t, sc, c, "goto: clip id: 99999"); !strings.HasPrefix(first, "102") {
+		t.Errorf("goto missing clip = %q, want 102", first)
+	}
+	if first, _ := hyperdeckCmd(t, sc, c, "goto: timecode: 00:00:01:00"); !strings.HasPrefix(first, "103") {
+		t.Errorf("goto timecode = %q, want 103", first)
 	}
 	// Subscription values are case-insensitive.
 	if _, lines := hyperdeckCmd(t, sc, c, "notify: transport: TRUE"); !hyperdeckHas(lines, "transport: true") {
@@ -336,6 +339,113 @@ func TestHyperdeckClipIDMatchesActiveTake(t *testing.T) {
 	}
 	if id != strconv.Itoa(want+1) {
 		t.Fatalf("clip id = %s, want %d", id, want+1)
+	}
+}
+
+// goto: clip id: N picks take N of clips get for the next Play and shows it
+// as the idle clip id; the take being recorded is refused.
+func TestHyperdeckGotoClipSelectsTake(t *testing.T) {
+	dir := t.TempDir()
+	for _, n := range []string{"hd_20990101_120000_ch2_48kHz.wav", "hd_20990101_120100_ch2_48kHz.wav"} {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte("x"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mutex.Lock()
+	origPath, origSel, origRec, origFile, origPlay := RecordPath, selectedPlayback, isRecording, recordingFile, playbackFile
+	RecordPath, selectedPlayback, isRecording, recordingFile, playbackFile = dir, "", false, "", ""
+	mutex.Unlock()
+	// playbackFile is set below, once the files are listed: a take played
+	// earlier must not mask the new selection at idle.
+	t.Cleanup(func() {
+		mutex.Lock()
+		RecordPath, selectedPlayback, isRecording, recordingFile, playbackFile = origPath, origSel, origRec, origFile, origPlay
+		mutex.Unlock()
+	})
+	sc, c, cleanup := hyperdeckDial(t)
+	defer cleanup()
+
+	mutex.Lock()
+	files := recordingFiles()
+	mutex.Unlock()
+	if len(files) != 2 {
+		t.Fatalf("fixture listing: %v", files)
+	}
+	mutex.Lock()
+	playbackFile = files[1]
+	mutex.Unlock()
+	for _, bad := range []string{"0", "3", "x"} {
+		if first, _ := hyperdeckCmd(t, sc, c, "goto: clip id: "+bad); !strings.HasPrefix(first, "102") {
+			t.Errorf("goto clip %s = %q, want 102", bad, first)
+		}
+	}
+	if first, _ := hyperdeckCmd(t, sc, c, "goto: clip id: 1"); first != "200 ok" {
+		t.Fatalf("goto clip 1 = %q", first)
+	}
+	mutex.Lock()
+	sel, src := selectedPlayback, playbackSourceLocked()
+	mutex.Unlock()
+	if sel != files[0] || src != files[0] {
+		t.Fatalf("selected %q, play source %q, want %q", sel, src, files[0])
+	}
+	if _, lines := hyperdeckCmd(t, sc, c, "transport info"); !hyperdeckHas(lines, "clip id: 1") {
+		t.Errorf("idle transport info after goto = %v", lines)
+	}
+
+	// disk list numbers the takes exactly as clips get does.
+	first, lines := hyperdeckCmd(t, sc, c, "disk list")
+	if first != "206 disk list:" || len(lines) != 3 ||
+		!strings.HasPrefix(lines[1], "1: "+filepath.Base(files[0])+" ") ||
+		!strings.HasPrefix(lines[2], "2: "+filepath.Base(files[1])+" ") {
+		t.Errorf("disk list = %q %v", first, lines)
+	}
+
+	// Relative steps move from the current clip and stop at the ends.
+	for _, step := range []struct {
+		cmd, code string
+		want      int
+	}{
+		{"+1", "200", 1}, {"+1", "102", 1}, {"-1", "200", 0}, {"-1", "102", 0},
+	} {
+		if first, _ := hyperdeckCmd(t, sc, c, "goto: clip id: "+step.cmd); !strings.HasPrefix(first, step.code) {
+			t.Errorf("goto %s = %q, want %s", step.cmd, first, step.code)
+		}
+		mutex.Lock()
+		sel = selectedPlayback
+		mutex.Unlock()
+		if sel != files[step.want] {
+			t.Errorf("after goto %s selected %q, want %q", step.cmd, sel, files[step.want])
+		}
+	}
+	// With no clip current, -1 picks the last take.
+	mutex.Lock()
+	selectedPlayback, playbackFile = "", ""
+	mutex.Unlock()
+	if first, _ := hyperdeckCmd(t, sc, c, "goto: clip id: -1"); first != "200 ok" {
+		t.Errorf("goto -1 from none = %q", first)
+	}
+	mutex.Lock()
+	sel = selectedPlayback
+	mutex.Unlock()
+	if sel != files[1] {
+		t.Errorf("goto -1 from none selected %q, want %q", sel, files[1])
+	}
+	if first, _ := hyperdeckCmd(t, sc, c, "goto: clip id: 1"); first != "200 ok" {
+		t.Fatalf("goto clip 1 = %q", first)
+	}
+
+	mutex.Lock()
+	isRecording, recordingFile = true, files[1]
+	mutex.Unlock()
+	if first, _ := hyperdeckCmd(t, sc, c, "goto: clip id: 2"); !strings.HasPrefix(first, "103") {
+		t.Errorf("goto recording clip = %q, want 103", first)
+	}
+	mutex.Lock()
+	isRecording, recordingFile = false, ""
+	sel = selectedPlayback
+	mutex.Unlock()
+	if sel != files[0] {
+		t.Errorf("refused goto changed the selection to %q", sel)
 	}
 }
 
