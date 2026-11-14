@@ -4969,17 +4969,17 @@ func TestPanelRendersLiveTakeEveryPush(t *testing.T) {
 	take := filepath.Join(RecordPath, "live_20260101_120000_ch2_48kHz.wav")
 	t.Cleanup(func() { os.Remove(take) })
 	const secBytes = 2 * 3 * 48000 // 2 ch, 24-bit, 48 kHz
-	stDir, err := os.Stat(RecordPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// Pin an mtime no earlier listing can have: mtimes come from a coarse
+	// clock, so the take's creation can share a tick with an earlier test's
+	// cached listing and the take would stay hidden.
+	pin := time.Now().Add(time.Hour)
 	// grow writes a take of n seconds (no WAV header: the size estimate
 	// applies) and pins the directory mtime the fingerprint reads.
 	grow := func(n int) {
 		if err := os.WriteFile(take, make([]byte, 44+n*secBytes), 0644); err != nil {
 			t.Fatal(err)
 		}
-		os.Chtimes(RecordPath, stDir.ModTime(), stDir.ModTime())
+		os.Chtimes(RecordPath, pin, pin)
 	}
 	push := func() string {
 		teleWSMu.Lock()
