@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -4426,6 +4427,12 @@ func startCopyOperation() {
 		return
 	}
 
+	root, err := openCopyDestination(USBMountPoint)
+	if err != nil {
+		showSysNotice("COPY FAILED - NO USB")
+		logErrorf("USB copy destination: %v", err)
+		return
+	}
 	currentState = StateCopying
 	isCopying = true
 	copyDone = make(chan struct{})
@@ -4442,6 +4449,7 @@ func startCopyOperation() {
 	}
 
 	go func() {
+		defer root.Close()
 		if len(selectedFiles) == 0 {
 			mutex.Lock()
 			isCopying = false
@@ -4469,9 +4477,9 @@ func startCopyOperation() {
 			}
 
 			src := filepath.Join(RecordPath, file)
-			dst := filepath.Join(USBMountPoint, file)
+			dst := file
 
-			err := copyFile(src, dst, func() bool {
+			err := copyFile(src, root, dst, func() bool {
 				mutex.Lock()
 				defer mutex.Unlock()
 				return !isCopying
@@ -4486,7 +4494,7 @@ func startCopyOperation() {
 			} else if _, serr := os.Stat(channelsSidecar(src)); serr == nil {
 				// The take's channel names travel with it (small: no
 				// progress or cancel handling needed).
-				if err := copyFile(channelsSidecar(src), channelsSidecar(dst), func() bool { return false }); err != nil {
+				if err := copyFile(channelsSidecar(src), root, channelsSidecar(dst), func() bool { return false }); err != nil {
 					logWarnf("Failed to copy channel names of %s: %v", file, err)
 				}
 			}
@@ -4539,66 +4547,58 @@ func cancelCopyAndWait() {
 // a whole multi-GB take.
 var errCopyCancelled = fmt.Errorf("copy cancelled")
 
-func copyFile(src, dst string, cancelled func() bool) error {
+// openCopyDestination pins the filesystem for the lifetime of a copy.
+var openCopyDestination = os.OpenRoot
+
+func copyFile(src string, root *os.Root, dst string, cancelled func() bool) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
-
-	// Recreate the recording's subfolder (e.g. /media/usb/2026-08-30/) on
-	// the USB stick so a copied library stays organized by day.
-	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+	if err := root.MkdirAll(filepath.Dir(dst), 0755); err != nil {
 		return err
 	}
-
-	tmp := dst + ".tmp"
-	out, err := os.Create(tmp)
+	tmp := dst + "." + rand.Text() + ".tmp"
+	out, err := root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
 	if err != nil {
 		return err
 	}
+	defer out.Close()
+	defer root.Remove(tmp)
 	buf := make([]byte, 1<<20)
 	for {
 		if cancelled() {
-			out.Close()
-			if err := os.Remove(tmp); err != nil && !os.IsNotExist(err) {
-				logWarnf("copy: removing partial %s: %v", tmp, err)
-			}
 			return errCopyCancelled
 		}
 		n, rerr := in.Read(buf)
 		if n > 0 {
-			if _, werr := out.Write(buf[:n]); werr != nil {
-				out.Close()
-				if err := os.Remove(tmp); err != nil && !os.IsNotExist(err) {
-					logWarnf("copy: removing partial %s: %v", tmp, err)
-				}
-				return werr
+			if _, err := out.Write(buf[:n]); err != nil {
+				return err
 			}
 		}
+		if rerr == io.EOF {
+			break
+		}
 		if rerr != nil {
-			if rerr == io.EOF {
-				break
-			}
-			out.Close()
-			os.Remove(tmp)
 			return rerr
 		}
 	}
 	if err := out.Sync(); err != nil {
-		out.Close()
-		os.Remove(tmp)
 		return err
 	}
 	if err := out.Close(); err != nil {
-		os.Remove(tmp)
 		return err
 	}
-	if err := os.Rename(tmp, dst); err != nil {
+	if err := root.Rename(tmp, dst); err != nil {
 		return err
 	}
-	syncDir(filepath.Dir(dst))
-	return nil
+	dir, err := root.Open(filepath.Dir(dst))
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
 }
 
 // deleteAllRecordings removes every take and reports how many could not be

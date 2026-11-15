@@ -707,24 +707,28 @@ func TestCopyFileCancelAndSubdir(t *testing.T) {
 	if err := os.WriteFile(src, make([]byte, 3<<20), 0644); err != nil {
 		t.Fatal(err)
 	}
-	dst := filepath.Join(t.TempDir(), "2099-01-01", "take.wav")
+	usb := t.TempDir()
+	root, err := os.OpenRoot(usb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	dst := filepath.Join("2099-01-01", "take.wav")
 	calls := 0
-	err := copyFile(src, dst, func() bool { calls++; return calls > 1 })
+	err = copyFile(src, root, dst, func() bool { calls++; return calls > 1 })
 	if !errors.Is(err, errCopyCancelled) {
 		t.Fatalf("cancel mid-file: err %v", err)
 	}
-	for _, p := range []string{dst, dst + ".tmp"} {
-		if _, err := os.Stat(p); err == nil {
-			t.Errorf("%s left behind after cancel", p)
-		}
+	if entries, err := os.ReadDir(filepath.Join(usb, filepath.Dir(dst))); err != nil || len(entries) != 0 {
+		t.Fatalf("cancel left destination or temporary files: %v %v", entries, err)
 	}
-	if err := copyFile(src, dst, func() bool { return false }); err != nil {
+	if err = copyFile(src, root, dst, func() bool { return false }); err != nil {
 		t.Fatalf("copy into new day folder: %v", err)
 	}
-	if st, err := os.Stat(dst); err != nil || st.Size() != 3<<20 {
+	if st, err := os.Stat(filepath.Join(usb, dst)); err != nil || st.Size() != 3<<20 {
 		t.Fatalf("copied file: %v %v", st, err)
 	}
-	if err := copyFile(filepath.Join(t.TempDir(), "missing.wav"), dst+"2", func() bool { return false }); err == nil {
+	if err := copyFile(filepath.Join(t.TempDir(), "missing.wav"), root, dst+"2", func() bool { return false }); err == nil {
 		t.Error("missing source copied without error")
 	}
 }
