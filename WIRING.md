@@ -77,7 +77,9 @@ Pin layouts, component wiring, and testing for the Raspberry Pi 5 audio recorder
 ### 5. Audio (Ethernet Only)
 
 No analog or USB audio I/O — audio is AES67 over Ethernet via Inferno.
-Playback currently goes to local ALSA (target: route out through Inferno — Known Gaps #1).
+Playback goes out over the inferno network, with local ALSA as a development
+fallback when no inferno device exists. See [README.md](README.md#playback)
+for the authoritative playback design.
 
 ---
 
