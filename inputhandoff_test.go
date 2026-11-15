@@ -8,21 +8,23 @@ import (
 	"time"
 )
 
-// Characterize the legacy handoff through the recording caller before moving
-// it: timeout continuation and metadata fallback are intentionally retained here.
-func TestInputHandoffLegacyRecording(t *testing.T) {
+// Exercise the handoff through the recording caller, including reader-exit
+// refusal and the metadata fallback retained until the layout transaction fix.
+func TestInputHandoffRecording(t *testing.T) {
 	for _, tt := range []struct {
-		name           string
-		mode           int
-		ack            bool
-		monitorTimeout bool
-		channels       int
+		name        string
+		mode        int
+		ack         bool
+		monitorExit string
+		channels    int
 	}{
-		{"off leaves FIFO undrained", tcRecordOff, false, false, 2},
-		{"metadata acknowledges audio layout", tcRecordMeta, true, false, 2},
-		{"audio acknowledges extra channel", tcRecordAudio, true, false, 3},
-		{"audio timeout falls back to metadata", tcRecordAudio, false, false, 2},
-		{"monitor timeout still starts take", tcRecordOff, false, true, 2},
+		{"off leaves FIFO undrained", tcRecordOff, false, "", 2},
+		{"metadata acknowledges audio layout", tcRecordMeta, true, "", 2},
+		{"audio acknowledges extra channel", tcRecordAudio, true, "", 3},
+		{"audio timeout falls back to metadata", tcRecordAudio, false, "", 2},
+		{"monitor timeout refuses take", tcRecordOff, false, "timeout", 2},
+		{"missing monitor completion refuses take", tcRecordOff, false, "missing", 2},
+		{"confirmed monitor exit permits take", tcRecordOff, false, "exited", 2},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			initTestHardware(t)
@@ -49,6 +51,7 @@ func TestInputHandoffLegacyRecording(t *testing.T) {
 			oldMonitorCmd, oldMonitorDone, oldMonitoring := monitorCmd, monitorDone, monitoring
 			oldAudio, oldStart, oldFile := tcAudioTake, recordStart, recordingFile
 			oldTransport := currentState
+			oldNotice, oldNoticeUntil := sysNotice, sysNoticeUntil
 			demoMode, infernoState, fifoPath = false, InfernoRunning, "characterization-only.raw"
 			sampleRateIdx, channelCount = 1, 2
 			lastSampleRate, lastChannelCount, lastRxLatencyNs = sr, 2, rxLatencyNs
@@ -57,11 +60,17 @@ func TestInputHandoffLegacyRecording(t *testing.T) {
 			fifoLayoutWait, monitorHandoffWait = time.Millisecond, 0
 			monitorCmd, monitorDone, monitoring = nil, nil, false
 			currentState = StateIdle
-			if tt.monitorTimeout {
+			if tt.monitorExit != "" {
 				// An unclosed completion is an outgoing reader whose exit
 				// was not confirmed. No process signal is needed for this case.
 				monitorCmd = &exec.Cmd{}
 				monitorDone, monitoring = make(chan struct{}), true
+				if tt.monitorExit == "missing" {
+					monitorDone = nil
+				} else if tt.monitorExit == "exited" {
+					close(monitorDone)
+					monitorHandoffWait = time.Second
+				}
 			}
 			if tt.ack || tt.mode == tcRecordOff {
 				// Buffer the captured request only for inspection; the
@@ -86,9 +95,36 @@ func TestInputHandoffLegacyRecording(t *testing.T) {
 				close(writerDone)
 			}
 
+			outgoing, outgoingDone, oldMeterGen := monitorCmd, monitorDone, meterGen
+			refuse := tt.monitorExit == "timeout" || tt.monitorExit == "missing"
 			startRecording()
+			if refuse && !isRecording {
+				// Repeated Record and direct monitor starts must retain the
+				// same outgoing reader until its exit can be confirmed.
+				for attempt := 0; attempt < 2; attempt++ {
+					startRecording()
+					startMonitor()
+				}
+			}
+			if refuse {
+				if isRecording || ffmpegCmd != nil {
+					t.Error("take process opened before monitor exit was confirmed")
+				}
+				if !monitoring || monitorCmd != outgoing || monitorDone != outgoingDone {
+					t.Error("unconfirmed outgoing reader ownership was lost")
+				}
+				if meterGen != oldMeterGen {
+					t.Error("unconfirmed reader exit allocated new meters")
+				}
+				if sysNotice != "RECORD FAILED - SEE LOG" {
+					t.Errorf("missing short refusal notice: %q", sysNotice)
+				}
+			}
 			cmd, done, file := ffmpegCmd, recordingDone, recordingFile
 			rec, audio, mon := isRecording, tcAudioTake, monitoring
+			if tt.monitorExit == "exited" && (monitorCmd != nil || mon) {
+				t.Error("confirmed outgoing reader was not disowned before take meters")
+			}
 			var args []string
 			if cmd != nil {
 				args = append(args, cmd.Args...)
@@ -96,6 +132,7 @@ func TestInputHandoffLegacyRecording(t *testing.T) {
 			// Let the real recording reaper finish without restoring an
 			// input monitor or requesting another layout from the fake source.
 			tcAudioTake, infernoState, currentState = false, InfernoStopped, StateSettings
+			monitorCmd, monitorDone, monitoring = nil, nil, false
 			mutex.Unlock()
 			close(stop)
 			<-writerDone
@@ -117,10 +154,14 @@ func TestInputHandoffLegacyRecording(t *testing.T) {
 				monitorCmd, monitorDone, monitoring = oldMonitorCmd, oldMonitorDone, oldMonitoring
 				tcAudioTake, recordStart, recordingFile = oldAudio, oldStart, oldFile
 				currentState = oldTransport
+				sysNotice, sysNoticeUntil = oldNotice, oldNoticeUntil
 				mutex.Unlock()
 			})
+			if refuse {
+				return
+			}
 			if !rec {
-				t.Fatal("legacy handoff did not start recording")
+				t.Fatal("handoff did not start recording")
 			}
 			if mon || audio != (tt.mode == tcRecordAudio && tt.ack) {
 				t.Fatalf("monitoring=%v, audio=%v", mon, audio)
@@ -156,4 +197,52 @@ func TestInputHandoffLegacyRecording(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestInputHandoffConfirmedExitKeepsTakeMeters(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("real ffmpeg required for monitor/take meters")
+	}
+	initTestHardware(t)
+	demoTestCleanup(t)
+	resetTransportCleanup(t)
+	setTimecodeSettings(t, tcSourceOff, tcRecordOff, false)
+	ensureMonitorDown(t)
+	t.Cleanup(func() { quiesceTransport(t) })
+	mutex.Lock()
+	setDemoModeLocked(true)
+	startMonitor()
+	outgoing, oldCmd, oldGen := monitorDone, monitorCmd, meterGen
+	mutex.Unlock()
+	if outgoing == nil || oldCmd == nil {
+		t.Fatal("input monitor did not start")
+	}
+	waitFor(t, 3*time.Second, "live monitor meters", func() bool {
+		mutex.Lock()
+		defer mutex.Unlock()
+		return meterPeakDB > meterSilence
+	})
+
+	mutex.Lock()
+	startRecording()
+	rec, disowned, gen := isRecording, monitorCmd == nil && !monitoring, meterGen
+	exited := false
+	select {
+	case <-outgoing:
+		exited = true
+	default:
+	}
+	mutex.Unlock()
+	if !rec || !exited || !disowned || gen <= oldGen {
+		t.Fatalf("take=%v, reader exited=%v, disowned=%v, meter generation=%d (old %d)",
+			rec, exited, disowned, gen, oldGen)
+	}
+	// The old process reaper can now acquire the app mutex. Fresh take meters
+	// must remain allocated and receive live samples after that handoff.
+	waitFor(t, 3*time.Second, "live take meters after monitor exit", func() bool {
+		mutex.Lock()
+		defer mutex.Unlock()
+		return isRecording && meterGen == gen && len(meterChannelPeak) == channelCount &&
+			len(meterChannelRMS) == channelCount && meterPeakDB > meterSilence
+	})
 }

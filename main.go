@@ -3182,7 +3182,13 @@ func startRecording() {
 		return
 	}
 
-	input := prepareTakeInputLocked()
+	input, err := prepareTakeInputLocked()
+	if err != nil {
+		logWarnf("Cannot start recording: %v", err)
+		showSysNotice("RECORD FAILED - SEE LOG")
+		showWebNotice("Recording refused: " + err.Error() + " - try again")
+		return
+	}
 	recordStart = input.started
 	timestamp := recordStart.Format("20060102_150405")
 	sampleRate := sampleRates[sampleRateIdx]

@@ -26,10 +26,10 @@ var monitorHandoffWait = 500 * time.Millisecond
 // writer for the take's layout and first position. Caller holds the app mutex;
 // FIFO writers must serve requests without acquiring it.
 //
-// This extraction preserves the legacy timeout behavior: an unconfirmed monitor
-// exit still permits a take, and an unacknowledged TC-audio layout falls back to
-// metadata. Those behaviors need separate fixes with failing regressions.
-func prepareTakeInputLocked() takeInput {
+// Reader ownership is retained on failure, so neither another take nor a
+// monitor can open the FIFO until the outgoing reader's exit is confirmed.
+// An unacknowledged TC-audio layout still falls back to metadata.
+func prepareTakeInputLocked() (takeInput, error) {
 	// A named FIFO only supports one real reader at a time - concurrent
 	// readers split frames between them. Wait for the outgoing monitor to
 	// exit before the recorder opens the FIFO: what Inferno writes meanwhile
@@ -44,22 +44,18 @@ func prepareTakeInputLocked() takeInput {
 				logWarnf("monitor handoff: SIGKILL failed: %v", err)
 			}
 		}
-		// Claim monitor ownership synchronously: the old ffmpeg exits
-		// asynchronously, and its reaping goroutine clears the meter
-		// slices when monitorCmd still points at it - which would wipe
-		// the fresh take's slices allocated below and leave the whole
-		// take meterless. Disowning first makes that check fail.
+		if outgoing == nil {
+			return takeInput{}, errors.New("input monitor has no exit completion")
+		}
+		select {
+		case <-outgoing:
+		case <-time.After(monitorHandoffWait):
+			return takeInput{}, errors.New("input monitor exit timed out")
+		}
+		// The process is gone. Disown it before allocating the take's meters
+		// so its reaper, waiting for the app mutex, cannot clear them.
 		monitorCmd = nil
 		monitoring = false
-		if outgoing != nil {
-			select {
-			case <-outgoing:
-			case <-time.After(monitorHandoffWait):
-				// Typically an ffmpeg blocked on an empty FIFO, which ignores
-				// SIGTERM - nothing is flowing for the two readers to split.
-				logWarnf("monitor still running after %v; starting the take anyway", monitorHandoffWait)
-			}
-		}
 	}
 
 	input := takeInput{started: time.Now(), channels: channelCount}
@@ -77,5 +73,5 @@ func prepareTakeInputLocked() takeInput {
 			}
 		}
 	}
-	return input
+	return input, nil
 }
