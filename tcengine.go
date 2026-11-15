@@ -418,14 +418,15 @@ var tcAudioTake bool
 // tcEndAudioTakeLocked puts the FIFO back to the audio channels after a
 // take that recorded timecode as audio (or failed to start). The take's
 // ffmpeg is gone, so nothing reads the FIFO across the switch. Caller
-// holds the app mutex.
+// holds the app mutex. Failed restoration remains owed in inputRecovery even
+// after tcAudioTake is cleared.
 func tcEndAudioTakeLocked() {
 	if !tcAudioTake {
 		return
 	}
 	tcAudioTake = false
-	if _, ok := fifoSetLayout(false); !ok {
-		logWarnf("Timecode: the audio input did not switch back from the TIMECODE channel")
+	if err := prepareMonitorInputLocked(); err != nil {
+		logWarnf("Timecode: %v", err)
 	}
 }
 

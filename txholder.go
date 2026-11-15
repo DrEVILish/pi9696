@@ -356,7 +356,9 @@ func infernoRxLoop(dev pairedDevice, path string, quit <-chan struct{}, done cha
 // fifoLayoutReq asks the FIFO writer to switch layout.
 type fifoLayoutReq struct {
 	withTC bool
-	reply  chan int64 // the stream position of the first frame in the layout
+	reply  chan int64    // unbuffered: the rendezvous commits the layout at this position
+	cancel chan struct{} // closed by the caller on return
+	done   chan struct{} // closed by the writer after drain/commit work
 }
 
 // The writers serve these between chunks: the in-process capture loop and
@@ -372,21 +374,35 @@ var fifoLayoutWait = 500 * time.Millisecond
 
 // fifoSetLayout switches the active FIFO's layout (with or without the
 // TIMECODE channel) and returns the stream position the new layout starts
-// at. ok is false when no writer answered (none running). Caller holds the
-// app mutex (demoMode picks the writer); the writers never block on it.
+// at. A failed request cannot commit a later layout change. Caller holds the
+// app mutex (demoMode picks the writer); the writers never acquire it.
 func fifoSetLayout(withTC bool) (pos int64, ok bool) {
+	syncInputRecoverySourceLocked()
+	if !finishInputDrainLocked() {
+		return 0, false
+	}
 	ctl := rxFifoCtl
 	if demoMode && demoFifoPath != "" {
 		ctl = demoFifoCtl
 	}
-	r := fifoLayoutReq{withTC: withTC, reply: make(chan int64, 1)}
+	r := fifoLayoutReq{
+		withTC: withTC, reply: make(chan int64),
+		cancel: make(chan struct{}), done: make(chan struct{}),
+	}
+	defer close(r.cancel)
 	select {
 	case ctl <- r:
+		inputRecovery.draining = r.done
 	case <-time.After(fifoLayoutWait):
 		return 0, false
 	}
 	select {
 	case pos = <-r.reply:
+		// The rendezvous commits the layout. Only the assignment and lock
+		// release remain; wait for those before publishing confirmation.
+		<-r.done
+		inputRecovery.draining = nil
+		inputRecovery.restoreAudio = withTC
 		return pos, true
 	case <-time.After(fifoLayoutWait):
 		return 0, false
@@ -399,7 +415,7 @@ type fifoFeed struct {
 	ctl    chan fifoLayoutReq
 	withTC bool
 	pos    int64 // frames taken from the source so far
-	drop   bool  // a switch happened mid-chunk: abandon the rest of it
+	drop   bool  // a drain happened mid-chunk: abandon the rest of it
 	// async hands the writes to a writer goroutine (the capture loop; the
 	// demo generator writes itself, since waiting is what paces it).
 	async   *fifoAsync
@@ -482,10 +498,13 @@ func (a *fifoAsync) run(fd int, quit <-chan struct{}) {
 	}
 }
 
-// serve applies a pending layout switch, if any.
+// serve drains for an accepted request, then commits its layout only on the
+// caller's acknowledgement rendezvous. True means the drain happened, including
+// cancellation: a partial synchronous write must abandon its remaining bytes.
 func (f *fifoFeed) serve() bool {
 	select {
 	case r := <-f.ctl:
+		defer close(r.done)
 		if a := f.async; a != nil {
 			// No write in flight while the FIFO drains, and nothing
 			// queued in the old layout survives.
@@ -503,9 +522,12 @@ func (f *fifoFeed) serve() bool {
 				break
 			}
 		}
-		f.withTC = r.withTC
 		f.drop = true
-		r.reply <- f.pos
+		select {
+		case r.reply <- f.pos:
+			f.withTC = r.withTC
+		case <-r.cancel:
+		}
 		return true
 	default:
 		return false
@@ -524,8 +546,8 @@ func (f *fifoFeed) layout(frames []int32, channels int) []int32 {
 var errFifoQuit = errors.New("quit")
 
 // write writes out whole, waiting out a full FIFO, until quit. A layout
-// switch while waiting drains the FIFO, and the rest of this chunk (in the
-// old layout) is dropped.
+// request while waiting drains the FIFO, and the rest of this chunk is dropped
+// even if the caller cancels without committing a layout change.
 func (f *fifoFeed) write(out []byte, quit <-chan struct{}, wait time.Duration) error {
 	f.drop = false
 	if a := f.async; a != nil {

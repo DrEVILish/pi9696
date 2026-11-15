@@ -3187,6 +3187,7 @@ func startRecording() {
 		logWarnf("Cannot start recording: %v", err)
 		showSysNotice("RECORD FAILED - SEE LOG")
 		showWebNotice("Recording refused: " + err.Error() + " - try again")
+		maybeResumeInputMonitorLocked()
 		return
 	}
 	recordStart = input.started
@@ -3606,6 +3607,11 @@ func stopRecording() {
 // startRecording's comment on why a FIFO can't have two real readers.
 func startMonitor() {
 	if !infernoUp() || isRecording || monitoring {
+		return
+	}
+
+	if err := prepareMonitorInputLocked(); err != nil {
+		logWarnf("Cannot start input monitor: %v", err)
 		return
 	}
 
