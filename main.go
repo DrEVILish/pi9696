@@ -4486,7 +4486,7 @@ func startCopyOperation() {
 			}
 
 			if !copyDestinationMounted(root) {
-				failed++
+				failed += len(selectedFiles) - i
 				break
 			}
 			src := filepath.Join(RecordPath, file)

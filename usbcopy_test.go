@@ -76,6 +76,23 @@ func TestCopyRefusesUnmountedUSB(t *testing.T) {
 	if started {
 		t.Fatal("copy started without a USB mount")
 	}
+	// Remove the mount after it is opened, before the worker can take the mutex.
+	os.WriteFile(procMountsPath, []byte("/dev/test "+USBMountPoint+" ext4 rw 0 0\n"), 0600)
+	mutex.Lock()
+	filesToCopy = map[string]bool{f: true, f + "2": true}
+	startCopyOperation()
+	done = copyDone
+	os.WriteFile(procMountsPath, nil, 0600)
+	mutex.Unlock()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("copy stuck after removal")
+	}
+	if sysNotice != "COPY FAILED: 2 FILES" {
+		t.Errorf("removal skipped both files but notice was %q", sysNotice)
+	}
+
 }
 
 func TestCopyPinsDestinationAcrossRemoval(t *testing.T) {
