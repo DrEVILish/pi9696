@@ -7076,6 +7076,18 @@ func TestCopyReportsFailedFiles(t *testing.T) {
 	if got := run(good, "vanished_20990101_120001_ch2_48kHz.wav"); got != "COPY FAILED: 1 FILES" {
 		t.Errorf("copy with a missing file: notice %q, want COPY FAILED: 1 FILES", got)
 	}
+	sidecar := channelsSidecar(filepath.Join(RecordPath, good))
+	if err := os.WriteFile(sidecar, []byte(`{"channels":[]}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Remove(sidecar) })
+	if err := os.Mkdir(channelsSidecar(filepath.Join(usb, good)), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if got := run(good); got != "COPY FAILED: 1 FILES" {
+		t.Errorf("missing metadata: notice %q, want failure", got)
+	}
+
 }
 
 // A burst of concurrent login attempts used to pass the limiter all at once

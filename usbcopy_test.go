@@ -43,9 +43,11 @@ func TestCopyCannotEscapeUSB(t *testing.T) {
 func TestCopyRefusesUnmountedUSB(t *testing.T) {
 	oldMP, oldMounts := USBMountPoint, procMountsPath
 	oldMounted, oldSel, oldState := usbMounted, filesToCopy, currentState
+	oldNotice, oldUntil := sysNotice, sysNoticeUntil
 	defer func() {
 		USBMountPoint, procMountsPath = oldMP, oldMounts
 		usbMounted, filesToCopy, currentState = oldMounted, oldSel, oldState
+		sysNotice, sysNoticeUntil = oldNotice, oldUntil
 	}()
 	USBMountPoint = t.TempDir()
 	procMountsPath = filepath.Join(t.TempDir(), "mounts")

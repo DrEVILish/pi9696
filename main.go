@@ -4509,6 +4509,7 @@ func startCopyOperation() {
 				// progress or cancel handling needed).
 				if err := copyFile(channelsSidecar(src), root, channelsSidecar(dst), func() bool { return false }); err != nil {
 					logWarnf("Failed to copy channel names of %s: %v", file, err)
+					failed++
 				}
 			}
 			mutex.Lock()
