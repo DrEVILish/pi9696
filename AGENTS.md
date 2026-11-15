@@ -16,3 +16,11 @@ After each commit and build, restart the pi9696 service.
 - Docs: `README.md` is the single design document (features/UX/UI/architecture/decisions/status); `WIRING.md` is GPIO/power. There is no separate design record. Keep lamp/pin tables in sync with `hardware/lamps.go`.
 - Terminology: documentation never says "Dante" - always refer to inferno (inferno network, inferno TX/RX, inferno controller). Paraphrase quoted upstream text or tool output rather than reproducing the word.
 - The OLED uses fixed 256×64 layout with specific font contexts (`statusbar`/`header`/`menu`/`selected`/`details`/`alert`/`recording`); new menu text must fit one 256px line or it silently overflows.
+
+## Cross-area work
+
+Before changing behavior shared by area owners, read the Project ownership
+section in `README.md` and coordinate scope with the project lead. The lead
+assigns one implementation writer per shared checkout; other area threads
+inspect and advise until given an edit assignment. Report validation and
+cross-area effects before handing the checkout back for integration.

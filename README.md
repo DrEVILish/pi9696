@@ -110,6 +110,27 @@ Key decisions:
 
 ---
 
+## Project ownership
+
+The project lead coordinates priorities, cross-area decisions, verification and
+integration. Area threads are named for these responsibilities:
+
+| Area thread | Responsibility |
+|---|---|
+| Playback & Transport | Decoder and playback pump lifetime; record/play exclusion; seek, pause, stop, take selection and HyperDeck transport |
+| Inferno Capture & FIFO | Paired device, capture, FIFO/layout, idle feeding, clock gate, receive latency and inferno lifecycle |
+| Timecode & Chase | LTC/MTC, labels/rates, input lock, take stamps, output timing and chase decisions |
+| Takes, Metadata & USB | Take listing, WAV/companion-file metadata, channel names, USB copy and format |
+| WebUI & Front Panel | Browser/OLED presentation, HTTP authentication/settings, WebSockets, GPIO controls and wiring reference |
+| Deployment & Verification | Installer, deployment configuration, CI, browser/interop test infrastructure and deployment evidence |
+
+Ownership follows responsibilities: `main.go`, `remote.go` and `txholder.go`
+span several areas. The lead assigns one implementation writer per shared
+checkout and coordinates handoffs before edits. UI and test infrastructure
+owners coordinate with the owner of the behavior being exercised.
+
+---
+
 ## Features
 
 ### Recording
