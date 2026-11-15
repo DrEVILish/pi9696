@@ -817,6 +817,8 @@ func signalTERM(p *os.Process, what string) {
 // fault the operator must hear about; before, both were reaped silently.
 var stopRequested sync.Map // *exec.Cmd -> struct{}
 
+// A live command is validated and marked under the app mutex, which also
+// guards retirement; no writer may recreate its mark after retirement.
 func markStopRequested(cmd *exec.Cmd) {
 	if cmd != nil {
 		stopRequested.Store(cmd, struct{}{})
@@ -4087,13 +4089,14 @@ func armDemoPlaybackEnd(cmd *exec.Cmd, total time.Duration) {
 		cur, endCmd := playbackCmd, demoEndCmd
 		stillDemo := demoMode
 		demoEndTimer = nil
-		mutex.Unlock()
 		if !stillDemo || cur != cmd || cur != endCmd || cmd.Process == nil {
+			mutex.Unlock()
 			return
 		}
+		markStopRequested(cmd)
+		mutex.Unlock()
 		// SIGCONT first: a paused stand-in is SIGSTOP'd and would
 		// defer the TERM forever (same trap stopPlayback handles).
-		markStopRequested(cmd)
 		if err := cmd.Process.Signal(syscall.SIGCONT); err == nil {
 			_ = cmd.Process.Signal(syscall.SIGTERM)
 		}
