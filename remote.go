@@ -682,21 +682,21 @@ func handleLoginPost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	submitted := normalizeToken(r.FormValue("token"))
-	// Rotation writes remoteToken under the app mutex; reading it bare here
-	// raced with that write.
+	// Validate and issue under the same lock as rotation: an old token
+	// cannot create a session after rotation has revoked the old sessions.
 	mutex.Lock()
-	token := remoteToken
-	mutex.Unlock()
-	if subtle.ConstantTimeCompare([]byte(submitted), []byte(token)) != 1 {
+	if subtle.ConstantTimeCompare([]byte(submitted), []byte(remoteToken)) != 1 {
+		mutex.Unlock()
 		loginLimit.recordFailure(ip)
 		w.WriteHeader(http.StatusUnauthorized)
 		writeLoginPage(w, loginPageData{Error: "Invalid token", Boxes: boxesFromToken(submitted)})
 		return
 	}
 
-	loginLimit.recordSuccess(ip)
 	// Mint a fresh session ID; the cookie value is never the token.
 	sessionID := sessions.create(sessionLifetime)
+	mutex.Unlock()
+	loginLimit.recordSuccess(ip)
 	http.SetCookie(w, &http.Cookie{
 		Name:     remoteSessionCookie,
 		Value:    sessionID,
