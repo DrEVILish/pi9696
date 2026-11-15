@@ -618,31 +618,46 @@ func noteActivity() {
 // WiFi is OFF by default: nothing enables it at install time, and wifiEnabled
 // starts false unless the operator persisted an explicit on. wifiSSID (the AP
 // name) defaults to the device name; the password is user-set via the web UI.
+var wifiConfigPath = "/etc/hostapd/pi9696.conf"
+
 func applyWifiConfig(ssid, pass string, enabled bool) {
 	if isSimMode() {
 		logInfof("wifi: sim mode - AP %q enabled=%v (no hardware change)", ssid, enabled)
 		return
 	}
 
-	apConf := "/etc/hostapd/pi9696.conf"
+	apConf := wifiConfigPath
 	conf := "interface=wlan0\ndriver=nl80211\nssid=" + sanitizeHostapd(ssid) +
 		"\nwpa=2\nwpa_passphrase=" + sanitizeHostapd(pass) +
 		"\nwpa_key_mgmt=WPA-PSK\nrsn_pairwise=CCMP\nchannel=6\nhw_mode=g\nignore_broadcast_ssid=0\n"
 	if err := os.WriteFile(apConf, []byte(conf), 0600); err != nil {
-		logErrorf("wifi: failed to write %s: %v", apConf, err)
+		wifiApplyFailed(fmt.Errorf("write %s: %w", apConf, err))
 		return
 	}
 
 	var cmd *exec.Cmd
 	if enabled {
-		cmd = exec.Command("systemctl", "enable", "--now", "hostapd")
+		if out, err := exec.Command("systemctl", "enable", "hostapd").CombinedOutput(); err != nil {
+			wifiApplyFailed(fmt.Errorf("enable hostapd: %w: %s", err, out))
+			return
+		}
+		cmd = exec.Command("systemctl", "restart", "hostapd")
 	} else {
 		cmd = exec.Command("systemctl", "disable", "--now", "hostapd")
 	}
 	if out, err := cmd.CombinedOutput(); err != nil {
-		logErrorf("wifi: hostapd %s failed: %v: %s", map[bool]string{true: "start", false: "stop"}[enabled], err, out)
+		wifiApplyFailed(fmt.Errorf("hostapd update: %w: %s", err, out))
+		return
 	}
 	logInfof("wifi: access point %q %s", ssid, map[bool]string{true: "started", false: "stopped"}[enabled])
+}
+
+func wifiApplyFailed(err error) {
+	logErrorf("wifi: %v", err)
+	mutex.Lock()
+	showSysNotice("WIFI APPLY FAILED")
+	showWebNotice("Wi-Fi access point update failed - see the log")
+	mutex.Unlock()
 }
 
 // setWifiEnabled flips the runtime AP state, persists it (so it's also the
