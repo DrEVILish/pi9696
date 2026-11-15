@@ -104,6 +104,18 @@ Key decisions:
 - Recording starts only from idle, never over a take. Playback and recording
   are mutually exclusive.
 - ffmpeg is the capture/playback converter; no native rewrite planned.
+- A playback generation is one decoder and its output pump. Start and seek
+  share decoder launch/reaping; decoder cleanup completion remains separate
+  from the pump draining a natural end's buffered audio.
+- `takemetadata.go` resolves take facts below presentation: WAV format/data/BWF,
+  companion-file labels/timecode, and legacy filename fallback. Playback,
+  channel defaults and presentation use the same resolved format; renaming a
+  take cannot bypass known format checks.
+- `inputhandoff.go` owns reader retirement, layout acknowledgment and recovery.
+  A take requires confirmed monitor exit. Canceled layout requests cannot
+  switch later, and accepted cleanup must finish before another reader opens.
+  Audio-only restoration stays owed to the same writer until acknowledged;
+  replacing that writer clears its old recovery obligation.
 - inferno changes live in the [DrEVILish/inferno](https://github.com/DrEVILish/inferno)
   fork (`dev`), pinned by commit in the installer; nothing is filed upstream
   without the maintainer's consent.
@@ -400,6 +412,8 @@ PI9696_SIM=1 ./pi9696    # full app without SPI/GPIO; token printed to stderr
 
 ```
 main.go           state machine, menu actions, recording/playback, inferno lifecycle
+inputhandoff.go   monitor-to-take reader/layout handoff and source-bound recovery
+takemetadata.go   shared WAV/companion-file/filename facts and timecode precedence
 display.go        OLED render loop, screens and menu pages
 remote.go         web server: auth, dashboard, settings, downloads, meter push
 web/dashboard.html  the dashboard page template (HTML/CSS/JS, embedded)
