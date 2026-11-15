@@ -4009,33 +4009,36 @@ func startPlaybackFrom(file string, pos time.Duration) bool {
 	playbackDone = done
 	armDemoPlaybackEnd(cmd, playbackDuration-pos)
 
-	// cmd.Wait must only ever be called once, and this goroutine is its sole
-	// owner - whether playback finishes naturally (EOF) or is interrupted by
-	// stopPlayback/gracefulShutdown sending SIGTERM, this is what reaps the
-	// process and flips the state back to idle.
-	go func() {
-		werr := cmd.Wait()
-		asked := takeStopRequested(cmd)
-		mutex.Lock()
-		if playbackCmd == cmd {
-			if werr != nil && !asked {
-				reportPlaybackExitLocked(file, werr)
-			}
-			playbackCmd = nil
-			monitoringOutput = false
-			playbackPausedElapsed = 0
-			if currentState == StatePlaying || currentState == StatePaused {
-				currentState = StateIdle
-			}
-			resumeDeferredInfernoRestartLocked()
-		}
-		// Back to idle and the input monitor is expected to be a persistent,
-		// always-on thing (started at startup), so bring it back up.
-		maybeResumeInputMonitorLocked()
-		mutex.Unlock()
-		close(done)
-	}()
+	go reapPlayback(cmd, file, done, true)
 	return true
+}
+
+// reapPlayback owns the decoder's sole Wait and closes done after state cleanup,
+// independently of the TX pump draining its pipe. resumeMonitorForStale preserves
+// the private policy allowing only normal-start reapers to resume monitoring
+// after becoming stale.
+func reapPlayback(cmd *exec.Cmd, file string, done chan struct{}, resumeMonitorForStale bool) {
+	werr := cmd.Wait()
+	asked := takeStopRequested(cmd)
+	mutex.Lock()
+	current := playbackCmd == cmd
+	if current {
+		if werr != nil && !asked {
+			reportPlaybackExitLocked(file, werr)
+		}
+		playbackCmd = nil
+		monitoringOutput = false
+		playbackPausedElapsed = 0
+		if currentState == StatePlaying || currentState == StatePaused {
+			currentState = StateIdle
+		}
+		resumeDeferredInfernoRestartLocked()
+	}
+	if current || resumeMonitorForStale {
+		maybeResumeInputMonitorLocked()
+	}
+	mutex.Unlock()
+	close(done)
 }
 
 // playbackCmdFor builds the playback subprocess: real ffmpeg to ALSA, or in
@@ -4381,29 +4384,7 @@ func restartPlaybackAt(pos time.Duration) {
 	playbackDone = done
 	armDemoPlaybackEnd(cmd, playbackDuration-pos)
 	file := playbackFile
-	go func() {
-		werr := cmd.Wait()
-		asked := takeStopRequested(cmd)
-		mutex.Lock()
-		if playbackCmd == cmd {
-			if werr != nil && !asked {
-				reportPlaybackExitLocked(file, werr)
-			}
-			playbackCmd = nil
-			monitoringOutput = false
-			playbackPausedElapsed = 0
-			if currentState == StatePlaying || currentState == StatePaused {
-				currentState = StateIdle
-			}
-			resumeDeferredInfernoRestartLocked()
-			// Only the current generation resumes the monitor: a stale
-			// reaper from a pre-seek process must not stand the monitor
-			// back up while the new playback is running.
-			maybeResumeInputMonitorLocked()
-		}
-		mutex.Unlock()
-		close(done)
-	}()
+	go reapPlayback(cmd, file, done, false)
 }
 
 func loadFilesToCopy() {
