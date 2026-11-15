@@ -1,13 +1,9 @@
 package main
 
 import (
-	"encoding/binary"
-	"errors"
 	"fmt"
-	"io"
 	"math"
 	"net"
-	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -474,15 +470,7 @@ func (t *recTimecode) bextArgs() []string {
 // (takes from elsewhere; read at the output rate), else midnight - a take
 // without timecode starts at 00:00:00:00, as a DAW places one.
 func takeTimecode(wav string, sampleRate int) (timeRef int64, rate int, ok bool) {
-	if f, err := readRecordingSidecar(wav); err == nil && f.Timecode != nil {
-		if r := f.Timecode.rateIndex(); r >= 0 && f.Timecode.SampleRate > 0 {
-			return f.Timecode.TimeReference * int64(sampleRate) / int64(f.Timecode.SampleRate), r, true
-		}
-	}
-	if ref, err := wavTimeReference(wav); err == nil {
-		return ref, tcOutputRate(), true
-	}
-	return 0, tcOutputRate(), false
+	return readTakeMetadata(wav).timecodeAtRate(sampleRate, tcOutputRate())
 }
 
 // --- Output ------------------------------------------------------------------
@@ -794,47 +782,6 @@ func tcPeersText() string {
 		return "no peers"
 	}
 	return strings.Join(p, ", ")
-}
-
-// wavTimeReference reads the BWF time reference (samples since midnight)
-// from a WAV or RF64 file's bext chunk.
-func wavTimeReference(path string) (int64, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return 0, err
-	}
-	defer f.Close()
-	var hdr [12]byte
-	if _, err := io.ReadFull(f, hdr[:]); err != nil {
-		return 0, err
-	}
-	if id := string(hdr[:4]); (id != "RIFF" && id != "RF64") || string(hdr[8:12]) != "WAVE" {
-		return 0, errors.New("not a WAV file")
-	}
-	for {
-		var ch [8]byte
-		if _, err := io.ReadFull(f, ch[:]); err != nil {
-			return 0, errors.New("no bext chunk")
-		}
-		size := int64(binary.LittleEndian.Uint32(ch[4:]))
-		switch string(ch[:4]) {
-		case "bext":
-			var b [346]byte
-			if size < int64(len(b)) {
-				return 0, errors.New("short bext chunk")
-			}
-			if _, err := io.ReadFull(f, b[:]); err != nil {
-				return 0, err
-			}
-			return int64(binary.LittleEndian.Uint64(b[338:])), nil
-		case "data":
-			// bext comes before the audio in every writer that sets it.
-			return 0, errors.New("no bext chunk")
-		}
-		if _, err := f.Seek(size+size&1, io.SeekCurrent); err != nil {
-			return 0, err
-		}
-	}
 }
 
 // --- Front panel (OLED) ------------------------------------------------------

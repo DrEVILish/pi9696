@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -177,22 +176,7 @@ func writeSidecar(wav string, f recChannelsFile, durable bool) error {
 // takes, or a lost sidecar) numbered defaults for the channel count in its
 // filename.
 func recordingChannels(wav string) []recChannel {
-	if data, err := os.ReadFile(channelsSidecar(wav)); err == nil {
-		var f recChannelsFile
-		if json.Unmarshal(data, &f) == nil && len(f.Channels) > 0 {
-			sort.Slice(f.Channels, func(i, j int) bool { return f.Channels[i].Number < f.Channels[j].Number })
-			return f.Channels
-		}
-	}
-	n := 0
-	if m := recFilenameRe.FindStringSubmatch(filepath.Base(wav)); m != nil {
-		n, _ = strconv.Atoi(m[4])
-	}
-	out := make([]recChannel, n)
-	for i := range out {
-		out[i] = recChannel{Number: i + 1, Name: fmt.Sprintf("Ch %d", i+1)}
-	}
-	return out
+	return readTakeMetadata(wav).ChannelNames
 }
 
 // maxChannelNameLen bounds a recording channel name (it ends up in table
@@ -368,8 +352,8 @@ func handleAPIRecordingChannels(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
-	sc, _ := readRecordingSidecar(f)
-	json.NewEncoder(w).Encode(recChannelsFile{Channels: recordingChannels(f), Timecode: sc.Timecode})
+	meta := readTakeMetadata(f)
+	json.NewEncoder(w).Encode(recChannelsFile{Channels: meta.ChannelNames, Timecode: meta.Sidecar.Timecode})
 }
 
 // rxNamesCache keeps the unit's RX channel names for the meter tick (10 Hz

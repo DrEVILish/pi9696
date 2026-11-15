@@ -8,7 +8,6 @@ import (
 	"crypto/subtle"
 	"embed"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -2871,157 +2870,8 @@ type recordingRow struct {
 	DurationStr string
 }
 
-// recFilenameRe matches the app's own recording filenames, e.g.
-// "recording_20240131_143022_ch2_48kHz.wav" or "Live_20240131_143022_ch2_48kHz.wav"
-// (prefix now precedes the fixed timestamp; see startRecording in main.go).
-// The prefix is validated to contain no underscore, so everything up to the
-// first _ before the timestamp is the prefix and the rest is unambiguous.
-// Everything but duration/end time is recoverable straight from the name;
-// duration needs the file's actual content (see recordingDuration).
-var recFilenameRe = regexp.MustCompile(`^([A-Za-z0-9 -]+)_(\d{8})_(\d{6})_ch(\d+)_(\d+)kHz(-\d+)?\.(\w+)$`)
-
-// recordingFormat reads the exact WAV format; old/incomplete files fall back
-// to their filename, whose integer kHz field rounds 44.1 kHz down to 44.
-func recordingFormat(path string) (channels, rate int) {
-	if m := recFilenameRe.FindStringSubmatch(filepath.Base(path)); m != nil {
-		channels, _ = strconv.Atoi(m[4])
-		rate, _ = strconv.Atoi(m[5])
-		rate *= 1000
-		if rate == 44000 {
-			rate = 44100
-		}
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	var hdr [12]byte
-	if _, err := io.ReadFull(f, hdr[:]); err != nil || string(hdr[8:]) != "WAVE" || (string(hdr[:4]) != "RIFF" && string(hdr[:4]) != "RF64") {
-		return
-	}
-	for {
-		var chunk [8]byte
-		if _, err := io.ReadFull(f, chunk[:]); err != nil {
-			return
-		}
-		size := int64(binary.LittleEndian.Uint32(chunk[4:]))
-		if string(chunk[:4]) == "fmt " {
-			var format [16]byte
-			if size < 16 {
-				return
-			}
-			if _, err := io.ReadFull(f, format[:]); err != nil {
-				return
-			}
-			ch, sr := int(binary.LittleEndian.Uint16(format[2:4])), int(binary.LittleEndian.Uint32(format[4:8]))
-			if ch > 0 && sr > 0 {
-				return ch, sr
-			}
-			return
-		}
-		if string(chunk[:4]) == "data" {
-			return
-		}
-		if _, err := f.Seek(size+size%2, io.SeekCurrent); err != nil {
-			return
-		}
-	}
-}
-
 func rateKHz(hz int) string            { return strconv.FormatFloat(float64(hz)/1000, 'f', -1, 64) }
 func (r recordingRow) RateKHz() string { return rateKHz(r.SampleRate) }
-
-// recordingDuration derives a take's length. The WAV data-chunk header is
-// parsed when sane (ffmpeg writes LIST/INFO chunks before data, so the old
-// fixed 44-byte header guess under-counted); a bogus size (0 = killed
-// mid-take, or larger than the file) falls back to the file-size estimate.
-func recordingDuration(path string, channels, sampleRate int) time.Duration {
-	info, err := os.Stat(path)
-	if err != nil {
-		return 0
-	}
-
-	const bytesPerSample = 3 // pcm_s24le
-	dataBytes := int64(0)
-	if f, err := os.Open(path); err == nil {
-		dataBytes = wavDataBytes(f)
-		f.Close()
-	}
-	if dataBytes <= 0 || dataBytes > info.Size()-12 {
-		dataBytes = info.Size() - 44
-	}
-	bytesPerSec := int64(channels) * int64(bytesPerSample) * int64(sampleRate)
-	if dataBytes <= 0 || bytesPerSec <= 0 {
-		return 0
-	}
-	// Divide before scaling to nanoseconds: time.Duration(dataBytes) *
-	// time.Second overflows int64 past ~9.2 GiB (reached in ~2 min at
-	// 128ch/192kHz), going negative and poisoning seeks, demo end timers
-	// and the UI.
-	secs := dataBytes / bytesPerSec
-	// Saturate instead of overflowing: beyond ~136 years the exact value is
-	// meaningless to every caller (UI, seeks, timers).
-	const maxSecs = int64(1 << 32)
-	if secs > maxSecs {
-		return time.Duration(maxSecs) * time.Second
-	}
-	rem := dataBytes % bytesPerSec
-	// rem < bytesPerSec, so rem*time.Second stays in int64 for any rate a
-	// real stream can have; absurd rates skip the sub-second part they
-	// cannot meaningfully have anyway.
-	if bytesPerSec < int64(9e9) {
-		return time.Duration(secs)*time.Second + time.Duration(rem)*time.Second/time.Duration(bytesPerSec)
-	}
-	return time.Duration(secs) * time.Second
-}
-
-// wavDataBytes returns the data-chunk size declared by a RIFF or RF64 WAV
-// header, or 0 when there is none. Takes are written with -rf64 auto, so one
-// past 4 GiB carries an RF64 header whose data chunk size is the 0xFFFFFFFF
-// placeholder and whose real 64-bit size lives in the leading ds64 chunk.
-func wavDataBytes(r io.ReadSeeker) int64 {
-	var hdr [12]byte
-	if _, err := io.ReadFull(r, hdr[:]); err != nil || string(hdr[8:12]) != "WAVE" {
-		return 0
-	}
-	rf64 := string(hdr[0:4]) == "RF64"
-	if !rf64 && string(hdr[0:4]) != "RIFF" {
-		return 0
-	}
-	ds64Data := int64(0)
-	for {
-		var ch [8]byte
-		if _, err := io.ReadFull(r, ch[:]); err != nil {
-			return 0
-		}
-		size := int64(binary.LittleEndian.Uint32(ch[4:8]))
-		switch string(ch[0:4]) {
-		case "ds64":
-			// riffSize(8) dataSize(8) sampleCount(8) [table...]
-			var ds [16]byte
-			if size < 16 {
-				return 0
-			}
-			if _, err := io.ReadFull(r, ds[:]); err != nil {
-				return 0
-			}
-			ds64Data = int64(binary.LittleEndian.Uint64(ds[8:16]))
-			size -= 16
-		case "data":
-			if rf64 && size == 0xFFFFFFFF {
-				return ds64Data
-			}
-			return size
-		}
-		if size%2 == 1 {
-			size++ // chunks are word-aligned
-		}
-		if _, err := r.Seek(size, io.SeekCurrent); err != nil {
-			return 0
-		}
-	}
-}
 
 func buildRecordingRow(path string) recordingRow {
 	name := filepath.Base(path)
@@ -3035,26 +2885,24 @@ func buildRecordingRow(path string) recordingRow {
 		row.RelPath = name
 	}
 
-	m := recFilenameRe.FindStringSubmatch(name)
-	if m == nil {
+	meta := readTakeMetadata(path)
+	// Preserve the legacy presentation/validation gate until its separate fix.
+	if !meta.Filename.StartValid {
 		return row
 	}
-	start, err := time.ParseInLocation("20060102 150405", m[2]+" "+m[3], time.Local)
-	if err != nil {
-		return row
-	}
-	channels, sampleRate := recordingFormat(path)
-	format := strings.ToUpper(m[7])
+	start := meta.Filename.Start
+	channels, sampleRate := meta.Channels, meta.SampleRate
+	format := meta.Filename.Format
 
 	row.Channels = channels
-	row.ChanNames = recordingChannels(path)
+	row.ChanNames = meta.ChannelNames
 	row.ChanSummary = channelSummary(row.ChanNames)
 	row.SampleRate = sampleRate
 	row.Format = format
 	row.StartStr = start.Format("2006-01-02 15:04:05")
 
 	// Keep the exact Hz rate for validation and duration; format kHz only for display.
-	dur := recordingDuration(path, channels, sampleRate)
+	dur := meta.Duration
 	if dur > 0 {
 		row.DurationStr = formatDuration(dur)
 		row.EndStr = start.Add(dur).Format("2006-01-02 15:04:05")
