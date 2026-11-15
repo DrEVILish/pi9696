@@ -33,8 +33,8 @@ const SKIP = new Set(['wifiSsid', 'wifiPass', 'wifiEnabled', 'tintcolor', 'brigh
     if (!(await page.locator('#tab-' + pane).isVisible())) { await page.click('#settingsBtn'); await page.waitForTimeout(300); }
     await page.click('#tab-' + pane); await page.waitForTimeout(200);
   };
-  const panes = ['device','audio','metering','metadata','transport','display','demo','logging'];
   await page.goto(BASE + '/');
+  const panes = await page.$$eval('.settings-pane[id^="pane-"]', els => els.map(e => e.id.slice(5)));
   // Inventory controls per pane.
   const controls = [];
   for (const pane of panes) {
@@ -45,6 +45,7 @@ const SKIP = new Set(['wifiSsid', 'wifiPass', 'wifiEnabled', 'tintcolor', 'brigh
     })));
     for (const c of ids) if (c.type !== 'hidden' && c.type !== 'range' && c.type !== 'color' && !SKIP.has(c.id)) controls.push({ pane, ...c });
   }
+  if (!controls.some(c => c.pane === 'timecode')) throw new Error('Timecode controls are missing from the round-trip inventory');
   console.log('controls:', controls.map(c => `${c.pane}/${c.id || c.container + '>' + c.name}`).join(' '));
   const valueOf = async (c) => page.evaluate(({ pane, container, name, id }) => {
     const root = document.getElementById('pane-' + pane);
