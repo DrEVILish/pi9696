@@ -7036,6 +7036,10 @@ func TestCopyReportsFailedFiles(t *testing.T) {
 	usb := t.TempDir()
 	origMP := USBMountPoint
 	USBMountPoint = usb
+	oldMounts := procMountsPath
+	procMountsPath = filepath.Join(t.TempDir(), "mounts")
+	os.WriteFile(procMountsPath, []byte("/dev/test "+usb+" ext4 rw 0 0\n"), 0600)
+	t.Cleanup(func() { procMountsPath = oldMounts })
 	os.MkdirAll(RecordPath, 0755)
 	good := "copytest_20990101_120000_ch2_48kHz.wav"
 	os.WriteFile(filepath.Join(RecordPath, good), []byte("RIFF"), 0644)

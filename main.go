@@ -4476,6 +4476,10 @@ func startCopyOperation() {
 				continue
 			}
 
+			if !copyDestinationMounted(root) {
+				failed++
+				break
+			}
 			src := filepath.Join(RecordPath, file)
 			dst := file
 
@@ -4503,6 +4507,9 @@ func startCopyOperation() {
 			mutex.Unlock()
 		}
 
+		if failed == 0 && !stopped && !copyDestinationMounted(root) {
+			failed++
+		}
 		mutex.Lock()
 		isCopying = false
 		currentState = StateIdle
@@ -4548,7 +4555,34 @@ func cancelCopyAndWait() {
 var errCopyCancelled = fmt.Errorf("copy cancelled")
 
 // openCopyDestination pins the filesystem for the lifetime of a copy.
-var openCopyDestination = os.OpenRoot
+var openCopyDestination = openUSBCopyRoot
+
+func openUSBCopyRoot(path string) (*os.Root, error) {
+	if _, err := usbDevicePath(); err != nil {
+		return nil, err
+	}
+	root, err := os.OpenRoot(path)
+	if err != nil {
+		return nil, err
+	}
+	if !copyDestinationMounted(root) {
+		root.Close()
+		return nil, fmt.Errorf("USB mount changed")
+	}
+	return root, nil
+}
+
+func copyDestinationMounted(root *os.Root) bool {
+	if _, err := usbDevicePath(); err != nil {
+		return false
+	}
+	pinned, err := root.Stat(".")
+	if err != nil {
+		return false
+	}
+	mounted, err := os.Stat(USBMountPoint)
+	return err == nil && os.SameFile(pinned, mounted)
+}
 
 func copyFile(src string, root *os.Root, dst string, cancelled func() bool) error {
 	in, err := os.Open(src)
