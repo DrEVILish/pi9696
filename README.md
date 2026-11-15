@@ -197,6 +197,10 @@ restarts inferno (deferred while a take records or plays). Network
 controllers read it (active, configured, default, range 0.5-10 ms) and set
 it: the fork hands a controller's change to the app
 (`INFERNO_LATENCY_REQUEST_PATH`), which adopts it like its own setting.
+LTC relay and chase compensate the running configured latency. If a sender
+asks for a higher per-flow latency, the extra delay is not reported to the
+timecode engine: output trails by that difference. For precise alignment,
+set Receive Latency at least as high as the source requests.
 Controllers offer their own lists (netaudio 0.5/1/2/5 ms); a value that is
 not a preset shows as custom. `test/interop/latency_check.py` checks it
 with netaudio.
@@ -252,7 +256,7 @@ Settings → Timecode on the panel and the Timecode pane of the dashboard.
   position (`snd_pcm_delay`), which ties a transmit position to the
   capture position of the same media instant, sample for sample. The
   chase and the relay compare what goes on the wire with the code at that
-  instant, plus inferno's receive latency (10 ms) for LTC, which reaches
+  instant, plus the running receive latency for LTC, which reaches
   the capture that much after the source sent it. MTC labels, which arrive
   over the network directly, are placed on the capture stream on arrival
   and averaged over the last 16. The code stopping or leaving the take
@@ -408,6 +412,34 @@ PI9696_SIM=1 ./pi9696    # full app without SPI/GPIO; token printed to stderr
   every settings control; `test/interop/` holds the two-host checks.
 - Tests share one `infernoWorker`: keep them mutex-safe and restore the
   globals they change.
+
+### Hardware validation (2026-11-15)
+
+Pi 4, 48 kHz, two hosts following the same hardware PTPv1 leader; no test
+packages were installed on the recorder. `test/interop/e2e_bitperfect.py`
+checked the recorded take against the generated source and network playback
+against the take, sample for sample.
+
+| Check | Result |
+|---|---|
+| 2 / 32 / 64 audio channels, `8416704` | Bit-perfect capture and returned playback; no missing start/tail or silent gaps |
+| 128 audio channels, `eb3dcf5` | 57,147,392 samples in each comparison; zero differences, missing frames or silent gaps |
+| Transport, `eb3dcf5` | Play, pause silence/frozen playhead, paused +5 s seek, resume and Stop silence passed over the network |
+| Timecode, `eb3dcf5`, 10 ms receive latency | All 14 `tc_interop.py` checks passed, including LTC/MTC, both restart-mode jumps and chase loss recovery; BWF reference error 0 samples, ordinary chase offset -0.083 ms |
+| Clock gate, `eb3dcf5` | Recording refused without statime; no take created; network lock recovered after restart |
+
+The 128-channel run exposed unsent transmit-ring samples being overwritten.
+`deploy/asound.conf` now enables `USE_FLOWS_CLOCK`: ALSA releases buffer space
+only after every transmit flow has read it. This plugin switch must be in
+ALSA configuration; setting an environment variable does not enable it.
+The original playback failure reproduced before this fix; isolated replay
+and the complete round trip passed afterwards. CI vet/race and controller
+unit checks passed on the corrected revision. Review against `1830376`
+returned zero actionable Standards or Spec findings.
+
+These are short functional checks, not a long-duration soak. Physical USB
+copy/cancel validation is deferred by the owner; Pi 5 hardware remains
+unverified.
 
 ### Repository layout
 
