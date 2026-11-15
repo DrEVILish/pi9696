@@ -437,6 +437,23 @@ and the complete round trip passed afterwards. CI vet/race and controller
 unit checks passed on the corrected revision. Review against `1830376`
 returned zero actionable Standards or Spec findings.
 
+Upstream refresh on the same date: `docs/install.sh` now pins inferno
+`6856006`, the latest `DrEVILish/inferno` `dev` revision checked. The compatible
+`teodly/statime` `inferno-dev` tip is still `244f20a`; that pin stays unchanged.
+The ALSA flow clock remains enabled. Native plugins built on dev and the Pi;
+no extra applications were installed and no development tests ran on the Pi.
+
+The refreshed plugin passed the 2 / 32 / 64 / 128-channel round trips with
+884,736 / 8,126,464 / 28,573,696 / 57,147,392 samples in each source/take and
+returned-playback comparison: zero differences, missing frames or silent
+gaps. Transport, all 14 timecode checks (BWF error 0 samples, ordinary chase
+-0.083 ms), controller latency read/change/refusal/restore, and clock-loss
+refusal/relock passed. A live mDNS query verified TX advertised 10 ms while
+the unit's configured RX latency was 1 ms. Dev checks passed: 201 inferno
+unit tests, 2 ALSA tests, loopback, 3 doctests, recorder vet/full race, and
+controller regressions. Original settings and four routes were restored;
+only this session's validation takes were removed.
+
 These are short functional checks, not a long-duration soak. Physical USB
 copy/cancel validation is deferred by the owner; Pi 5 hardware remains
 unverified.
