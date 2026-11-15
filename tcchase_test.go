@@ -107,7 +107,7 @@ func TestChasePlaysInSync(t *testing.T) {
 	// the code the device sends (10:00:00:00 from its first sample).
 	dir := t.TempDir()
 	take := filepath.Join(dir, "chase_20261007_095959_ch2_48kHz.wav")
-	if o, err := exec.Command("ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=f=440:d=6", "-ac", "2",
+	if o, err := exec.Command("ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=f=440:d=6:r=48000", "-ac", "2",
 		"-c:a", "pcm_s24le", take).CombinedOutput(); err != nil {
 		t.Fatalf("ffmpeg: %v %s", err, o)
 	}

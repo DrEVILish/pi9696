@@ -146,6 +146,7 @@ Key decisions:
   starts one for API clients).
 - A take whose format differs from the device's is refused, naming the cause:
   `SAMPLE RATE MISMATCH`, `CHANNEL COUNT MISMATCH` or `RATE + CHANNEL MISMATCH`.
+  Format checks and duration use the exact WAV header rate, including 44.1 kHz.
 - Keys: Play = play / pause / resume; Stop = stop (the next Play starts from
   the beginning), also from pause. The Play lamp flashes while paused.
 - Encoder: rotate while paused = 5 s scrub; push does nothing during playback
@@ -254,6 +255,8 @@ Settings → Timecode on the panel and the Timecode pane of the dashboard.
   mounted, so Format cannot reach it.
 - Copy selected/all takes to USB (per-day folders), delete with confirmation,
   format a USB drive (exFAT, FAT32 fallback with a 4 GB file-limit notice).
+- USB copies stay within the opened USB filesystem, refuse an absent mount,
+  and report failed channel/timecode companion-file copies as incomplete backups.
 - WebUI: per-file download and Download ALL as a streaming ZIP with a manifest.
 - Config export/import (non-secret JSON on USB; no Wi-Fi password or token).
 

@@ -2880,10 +2880,6 @@ type recordingRow struct {
 // duration needs the file's actual content (see recordingDuration).
 var recFilenameRe = regexp.MustCompile(`^([A-Za-z0-9 -]+)_(\d{8})_(\d{6})_ch(\d+)_(\d+)kHz(-\d+)?\.(\w+)$`)
 
-// recordingDuration derives a take's length. The WAV data-chunk header is
-// parsed when sane (ffmpeg writes LIST/INFO chunks before data, so the old
-// fixed 44-byte header guess under-counted); a bogus size (0 = killed
-// mid-take, or larger than the file) falls back to the file-size estimate.
 // recordingFormat reads the exact WAV format; old/incomplete files fall back
 // to their filename, whose integer kHz field rounds 44.1 kHz down to 44.
 func recordingFormat(path string) (channels, rate int) {
@@ -2936,6 +2932,10 @@ func recordingFormat(path string) (channels, rate int) {
 func rateKHz(hz int) string            { return strconv.FormatFloat(float64(hz)/1000, 'f', -1, 64) }
 func (r recordingRow) RateKHz() string { return rateKHz(r.SampleRate) }
 
+// recordingDuration derives a take's length. The WAV data-chunk header is
+// parsed when sane (ffmpeg writes LIST/INFO chunks before data, so the old
+// fixed 44-byte header guess under-counted); a bogus size (0 = killed
+// mid-take, or larger than the file) falls back to the file-size estimate.
 func recordingDuration(path string, channels, sampleRate int) time.Duration {
 	info, err := os.Stat(path)
 	if err != nil {

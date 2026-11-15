@@ -4210,7 +4210,7 @@ var playbackStopGrace = 2 * time.Second
 // playbackFileDuration returns the total duration of a WAV recording by
 // reading its exact WAV channel count and sample rate and deriving
 // the length from the actual file size (see recordingDuration). It returns 0
-// if the name doesn't match the app's own convention or the file can't be
+// if neither header nor filename provides a format, or the file cannot be
 // stat'd, in which case seeks are clamped to the running position and the
 // progress readout just shows elapsed without a total.
 func playbackFileDuration(path string) time.Duration {
@@ -4436,7 +4436,7 @@ func startCopyOperation() {
 		return
 	}
 
-	root, err := openCopyDestination(USBMountPoint)
+	root, err := openUSBCopyRoot(USBMountPoint)
 	if err != nil {
 		showSysNotice("COPY FAILED - NO USB")
 		logErrorf("USB copy destination: %v", err)
@@ -4564,9 +4564,7 @@ func cancelCopyAndWait() {
 // a whole multi-GB take.
 var errCopyCancelled = fmt.Errorf("copy cancelled")
 
-// openCopyDestination pins the filesystem for the lifetime of a copy.
-var openCopyDestination = openUSBCopyRoot
-
+// openUSBCopyRoot pins the mounted filesystem for the lifetime of a copy.
 func openUSBCopyRoot(path string) (*os.Root, error) {
 	if _, err := usbDevicePath(); err != nil {
 		return nil, err
