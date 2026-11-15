@@ -1,10 +1,13 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"pi9696/hardware"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -199,5 +202,139 @@ func TestPlaybackStartAndSeekLaunchTx(t *testing.T) {
 	}
 	if !equalInt32(audio, []int32{1, 2, 1, 2}) {
 		t.Fatalf("TX audio %v, want both decoded frames", audio)
+	}
+}
+
+type gatedPlaybackHolder struct {
+	fakeTxHolder
+	first, quiet     sync.Once
+	entered, release chan struct{}
+	silence, resume  chan struct{}
+}
+
+func (h *gatedPlaybackHolder) Write(b []int32) (int, error) {
+	h.first.Do(func() { close(h.entered); <-h.release })
+	if h.silence != nil {
+		zero := true
+		for _, v := range b {
+			if v != 0 {
+				zero = false
+				break
+			}
+		}
+		if zero {
+			h.quiet.Do(func() { close(h.silence); <-h.resume })
+		}
+	}
+	return h.fakeTxHolder.Write(b)
+}
+
+func TestPlaybackOwnsOutputAfterDecoderExit(t *testing.T) {
+	for _, action := range []string{"natural", "stop", "pause", "chase-loss"} {
+		t.Run(action, func(t *testing.T) {
+			initTestHardware(t)
+			saveTxGlobals(t)
+			resetTransportCleanup(t)
+			setTimecodeSettings(t, tcSourceOff, tcRecordOff, false)
+			fakeExecutable(t, "ffmpeg", "#!/bin/sh\nhead -c 16384 /dev/zero | tr '\\000' '\\001'\n")
+			file := filepath.Join(t.TempDir(), "Show_20260101_120000_ch2_48kHz.wav")
+			if err := os.WriteFile(file, nil, 0600); err != nil {
+				t.Fatal(err)
+			}
+			h := &gatedPlaybackHolder{entered: make(chan struct{}), release: make(chan struct{})}
+			if action == "pause" {
+				h.silence, h.resume = make(chan struct{}), make(chan struct{})
+			}
+			var release, resume sync.Once
+			mutex.Lock()
+			oldInferno, oldChase := infernoState, tcChase
+			infernoState, demoMode = InfernoStopped, false
+			currentState, isRecording = StateIdle, false
+			sampleRateIdx, channelCount = 1, 2
+			txHolder, txHolderReady, txHolderChannels = h, true, 3
+			started := startPlaybackFrom(file, 0)
+			cmd, done := playbackCmd, playbackDone
+			mutex.Unlock()
+			t.Cleanup(func() {
+				release.Do(func() { close(h.release) })
+				if h.resume != nil {
+					resume.Do(func() { close(h.resume) })
+				}
+				if cmd != nil && cmd.Process != nil {
+					_ = cmd.Process.Kill()
+				}
+				waitReaped(t, done, "playback output cleanup")
+				waitFor(t, 3*time.Second, "output pump retirement", func() bool { return txPumpsActive.Load() == 0 })
+				mutex.Lock()
+				infernoState, tcChase = oldInferno, oldChase
+				tcSetChaseLive(nil)
+				mutex.Unlock()
+			})
+			if !started {
+				t.Fatal("playback did not start")
+			}
+			select {
+			case <-h.entered:
+			case <-time.After(3 * time.Second):
+				t.Fatal("pump did not write")
+			}
+			// The OS process is reaped while its first output write remains gated.
+			waitFor(t, 3*time.Second, "decoder reaped", func() bool { _, err := os.Stat(fmt.Sprintf("/proc/%d", cmd.Process.Pid)); return os.IsNotExist(err) })
+			mutex.Lock()
+			if currentState != StatePlaying || playbackCmd != cmd || !infernoBusyLocked() || !monitoringOutput {
+				t.Error("decoder exit released live output ownership")
+			}
+			mutex.Unlock()
+			select {
+			case <-done:
+				t.Error("playback completed before output retired")
+			default:
+			}
+			switch action {
+			case "stop":
+				onButtonPress(hardware.StopButton)
+			case "pause":
+				onButtonPress(hardware.PlayButton)
+			case "chase-loss":
+				mutex.Lock()
+				tcChase.cmd = cmd
+				tcSetChaseLive(cmd)
+				tcChaseStepLocked(tcReading{}, time.Now())
+				mutex.Unlock()
+			}
+			release.Do(func() { close(h.release) })
+			if action == "pause" {
+				select {
+				case <-h.silence:
+				case <-done:
+					t.Error("paused decoder EOF ended playback")
+				case <-time.After(3 * time.Second):
+					t.Fatal("paused output did not write silence")
+				}
+				mutex.Lock()
+				paused := currentState == StatePaused
+				mutex.Unlock()
+				if !paused {
+					t.Error("pause lost after decoder EOF")
+				}
+				onButtonPress(hardware.PlayButton)
+				resume.Do(func() { close(h.resume) })
+			}
+			waitReaped(t, done, "complete playback")
+			waitFor(t, 3*time.Second, "audio drain", func() bool { return txPumpsActive.Load() == 0 })
+			nonzero := 0
+			for _, v := range h.flattened() {
+				if v != 0 {
+					nonzero++
+				}
+			}
+			want := 4096
+			if action == "stop" || action == "chase-loss" {
+				want = 2048
+			}
+			if nonzero != want {
+				t.Errorf("%s delivered %d nonzero samples, want %d", action, nonzero, want)
+			}
+		})
 	}
 }

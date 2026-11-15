@@ -105,8 +105,9 @@ Key decisions:
   are mutually exclusive.
 - ffmpeg is the capture/playback converter; no native rewrite planned.
 - A playback generation is one decoder and its output pump. Start and seek
-  share decoder launch/reaping; decoder cleanup completion remains separate
-  from the pump draining a natural end's buffered audio.
+  share decoder launch/reaping. Playback stays busy until both the decoder
+  has exited and its output pump has retired; natural ends drain buffered
+  audio before idle or a deferred device restart.
 - `takemetadata.go` resolves take facts below presentation: WAV format/data/BWF,
   companion-file labels/timecode, and legacy filename fallback. Playback,
   channel defaults and presentation use the same resolved format; renaming a

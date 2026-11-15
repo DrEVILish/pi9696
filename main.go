@@ -3943,7 +3943,7 @@ func startPlaybackFrom(file string, pos time.Duration) bool {
 // launchPlaybackLocked installs one decoder generation. The caller holds the
 // app mutex throughout, has validated the take and transport, and has stopped
 // and reaped any old decoder. This never unlocks or waits for decoder completion;
-// done remains the reaper's completion signal, independent of the TX pump.
+// done closes only after both decoder exit and output-pump retirement.
 // afterSeek preserves legacy metering order and stale-reaper monitor policy.
 func launchPlaybackLocked(file string, pos time.Duration, paused, afterSeek bool) error {
 	if !afterSeek {
@@ -3965,8 +3965,15 @@ func launchPlaybackLocked(file string, pos time.Duration, paused, afterSeek bool
 	startedPlaybackPipe(stdout)
 	playbackCmd = cmd
 	playbackViaDante = viaDante
+	var pumpDone <-chan struct{}
 	if viaDante {
-		go pumpPlaybackToTx(cmd, stdout, txHolder, playoutFor(file, pos))
+		finished := make(chan struct{})
+		pumpDone = finished
+		holder, playout := txHolder, playoutFor(file, pos)
+		go func() {
+			defer close(finished)
+			pumpPlaybackToTx(cmd, stdout, holder, playout)
+		}()
 	}
 	if afterSeek {
 		// The old reaper may have resumed input metering during the handoff.
@@ -3994,16 +4001,20 @@ func launchPlaybackLocked(file string, pos time.Duration, paused, afterSeek bool
 	done := make(chan struct{})
 	playbackDone = done
 	armDemoPlaybackEnd(cmd, playbackDuration-pos)
-	go reapPlayback(cmd, file, done, !afterSeek)
+	go reapPlayback(cmd, file, done, !afterSeek, pumpDone)
 	return nil
 }
 
-// reapPlayback owns the decoder's sole Wait and closes done after state cleanup,
-// independently of the TX pump draining its pipe. resumeMonitorForStale preserves
+// reapPlayback owns the decoder's sole Wait. Live output keeps its command
+// identity until its pump retires, so Stop, chase and restart deferral still
+// own the buffered tail. resumeMonitorForStale preserves
 // the private policy allowing only normal-start reapers to resume monitoring
 // after becoming stale.
-func reapPlayback(cmd *exec.Cmd, file string, done chan struct{}, resumeMonitorForStale bool) {
+func reapPlayback(cmd *exec.Cmd, file string, done chan struct{}, resumeMonitorForStale bool, pumpDone <-chan struct{}) {
 	werr := cmd.Wait()
+	if pumpDone != nil {
+		<-pumpDone
+	}
 	asked := takeStopRequested(cmd)
 	mutex.Lock()
 	current := playbackCmd == cmd
