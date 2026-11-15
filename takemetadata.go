@@ -29,7 +29,10 @@ func parseTakeFilename(path string) (n takeFilename) {
 	if m == nil {
 		return
 	}
-	n.Channels, _ = strconv.Atoi(m[4])
+	// Filename counts must fit the WAV channel field before allocating labels.
+	if channels, err := strconv.ParseUint(m[4], 10, 16); err == nil {
+		n.Channels = int(channels)
+	}
 	khz, _ := strconv.Atoi(m[5])
 	n.SampleRate = khz * 1000
 	if n.SampleRate == 44000 {

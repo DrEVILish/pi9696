@@ -272,3 +272,39 @@ func TestValidatePlaybackMetadataWithoutRecognizedName(t *testing.T) {
 		}
 	}
 }
+
+func TestTakeMetadataFilenameChannels(t *testing.T) {
+	for _, tc := range []struct {
+		name, count string
+		want        int
+	}{
+		{"overflow", "999999999999999999999999", 0},
+		{"outside_WAV", "65536", 0},
+		{"large_integer", "1000000000", 0},
+		{"zero", "0", 0},
+		{"legacy", "8", 8},
+		{"timecode_channel", "129", 129},
+		{"WAV_limit", "65535", 65535},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			file := filepath.Join(t.TempDir(), "Show_20261399_120000_ch"+tc.count+"_48kHz.wav")
+			if err := os.WriteFile(file, nil, 0600); err != nil {
+				t.Fatal(err)
+			}
+			// Invalid dates keep their bare listing, including incomplete takes.
+			if row := buildRecordingRow(file); row.Channels != 0 || row.SampleRate != 0 {
+				t.Fatalf("invalid-date row changed: %+v", row)
+			}
+			m := readTakeMetadata(file)
+			if m.Channels != tc.want || len(m.ChannelNames) != tc.want || m.SampleRate != 48000 {
+				t.Fatalf("filename fallback = %dch/%d labels/%dHz, want %dch at 48000Hz", m.Channels, len(m.ChannelNames), m.SampleRate, tc.want)
+			}
+			// A valid header remains authoritative even when filename facts are invalid.
+			writeTestWAV(t, file, 0, true)
+			m = readTakeMetadata(file)
+			if m.Channels != 1 || len(m.ChannelNames) != 1 || m.SampleRate != 48000 {
+				t.Fatalf("header override = %dch/%d labels/%dHz", m.Channels, len(m.ChannelNames), m.SampleRate)
+			}
+		})
+	}
+}
