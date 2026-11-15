@@ -163,8 +163,8 @@ func readTakeMetadata(path string) (m takeMetadata) {
 	if len(m.ChannelNames) > 0 {
 		sort.Slice(m.ChannelNames, func(i, j int) bool { return m.ChannelNames[i].Number < m.ChannelNames[j].Number })
 	} else {
-		// Stage A retains filename-based defaults; header consistency is a separate fix.
-		m.ChannelNames = make([]recChannel, m.Filename.Channels)
+		// Labels come from the sidecar; numbered defaults follow the resolved format.
+		m.ChannelNames = make([]recChannel, m.Channels)
 		for i := range m.ChannelNames {
 			m.ChannelNames[i] = recChannel{Number: i + 1, Name: fmt.Sprintf("Ch %d", i+1)}
 		}

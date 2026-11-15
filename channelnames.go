@@ -173,8 +173,7 @@ func writeSidecar(wav string, f recChannelsFile, durable bool) error {
 }
 
 // recordingChannels returns a take's channels: its sidecar, else (older
-// takes, or a lost sidecar) numbered defaults for the channel count in its
-// filename.
+// takes, or a lost sidecar) numbered defaults for the resolved channel count.
 func recordingChannels(wav string) []recChannel {
 	return readTakeMetadata(wav).ChannelNames
 }

@@ -3,7 +3,9 @@ package main
 import (
 	"encoding/binary"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -15,14 +17,14 @@ func TestTakeMetadataCompatibility(t *testing.T) {
 	if ch, hz := recordingFormat(file); ch != 1 || hz != 48000 {
 		t.Fatalf("header format = %d/%d", ch, hz)
 	}
-	// Stage A deliberately retains the legacy name-based channel defaults.
-	if got := recordingChannels(file); len(got) != 8 {
+	// Default names and playback channels follow the WAV header, not a stale name.
+	if got := recordingChannels(file); len(got) != 1 {
 		t.Fatalf("default names = %d", len(got))
 	}
 	mutex.Lock()
 	gotChannels := takeChannels(file)
 	mutex.Unlock()
-	if gotChannels != 8 {
+	if gotChannels != 1 {
 		t.Fatalf("decoder channels = %d", gotChannels)
 	}
 
@@ -149,5 +151,84 @@ func TestTakeMetadataIndependentFields(t *testing.T) {
 				t.Fatalf("data = %d, want %d", got, want)
 			}
 		})
+	}
+}
+
+func TestTakeChannelsFollowWAVHeader(t *testing.T) {
+	initTestHardware(t)
+	file := filepath.Join(t.TempDir(), "Show_20260101_120000_ch8_48kHz.wav")
+	makeWAV := exec.Command("ffmpeg", "-v", "error", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-t", "1", "-c:a", "pcm_s24le", "-rf64", "always", file)
+	if out, err := makeWAV.CombinedOutput(); err != nil {
+		t.Fatalf("create stereo WAV: %v %s", err, out)
+	}
+
+	mutex.Lock()
+	oldRate, oldChannels := sampleRateIdx, channelCount
+	sampleRateIdx, channelCount = 1, 2
+	mutex.Unlock()
+	t.Cleanup(func() {
+		mutex.Lock()
+		sampleRateIdx, channelCount = oldRate, oldChannels
+		mutex.Unlock()
+	})
+	mutex.Lock()
+	validationErr := validatePlaybackFile(file)
+	channels := takeChannels(file)
+	playout := playoutFor(file, 0)
+	cmd, pipe, err := dantePlaybackCmdFor(file, 0)
+	mutex.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pipe.Close()
+	if validationErr != nil {
+		t.Errorf("header-matching take refused: %v", validationErr)
+	}
+	if channels != 2 {
+		t.Errorf("take channels = %d, want 2", channels)
+	}
+	if playout.fileChannels != 2 {
+		t.Errorf("pump channels = %d, want 2", playout.fileChannels)
+	}
+	if args := strings.Join(cmd.Args, " "); !strings.Contains(args, "-ac 2 ") {
+		t.Errorf("decoder args = %s, want -ac 2", args)
+	}
+	names := recordingChannels(file)
+	if len(names) != 2 || names[0].Name != "Ch 1" || names[1].Name != "Ch 2" {
+		t.Errorf("default names = %+v, want two numbered channels", names)
+	}
+	row := buildRecordingRow(file)
+	if row.Channels != 2 || len(row.ChanNames) != 2 {
+		t.Errorf("row = %+v", row)
+	}
+
+	labels := []recChannel{{Number: 1, Name: "Left", Source: "Input@source", Device: "RX 1"}, {Number: 2, Name: "Right", Device: "RX 2"}}
+	if err := writeRecordingChannels(file, labels, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := recordingChannels(file); len(got) != 2 || got[0] != labels[0] || got[1] != labels[1] {
+		t.Errorf("sidecar labels changed: %+v", got)
+	}
+
+	// Missing/incomplete headers still use the filename; no format uses the device count.
+	if err := os.Remove(channelsSidecar(file)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{file, filepath.Join(t.TempDir(), filepath.Base(file))} {
+		mutex.Lock()
+		got := takeChannels(path)
+		mutex.Unlock()
+		if got != 8 || len(recordingChannels(path)) != 8 {
+			t.Errorf("filename fallback for %s: %d", path, got)
+		}
+	}
+	mutex.Lock()
+	unknown := takeChannels(filepath.Join(t.TempDir(), "unknown.wav"))
+	mutex.Unlock()
+	if unknown != 2 {
+		t.Errorf("device fallback = %d, want 2", unknown)
 	}
 }

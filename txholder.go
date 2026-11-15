@@ -21,7 +21,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -832,13 +831,11 @@ func failedPlaybackPipe(stdout io.Reader) {
 	}
 }
 
-// takeChannels is a take's channel count: from its name, else channelCount.
+// takeChannels uses the resolved header/filename count, else channelCount.
 // Caller holds the app mutex.
 func takeChannels(file string) int {
-	if m := recFilenameRe.FindStringSubmatch(filepath.Base(file)); m != nil {
-		if n, err := strconv.Atoi(m[4]); err == nil && n > 0 {
-			return n
-		}
+	if n := readTakeMetadata(file).Channels; n > 0 {
+		return n
 	}
 	return channelCount
 }
