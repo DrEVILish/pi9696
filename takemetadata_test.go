@@ -48,19 +48,6 @@ func TestTakeMetadataCompatibility(t *testing.T) {
 		}
 	}
 
-	for _, name := range []string{"renamed.wav", "Show_20261399_120000_ch8_48kHz.wav"} {
-		path := filepath.Join(dir, name)
-		writeTestWAV(t, path, 0, true)
-		if row := buildRecordingRow(path); row.Channels != 0 {
-			t.Fatalf("legacy row gate: %+v", row)
-		}
-		mutex.Lock()
-		err := validatePlaybackFile(path)
-		mutex.Unlock()
-		if err != nil {
-			t.Fatalf("legacy validation gate: %v", err)
-		}
-	}
 }
 
 func TestTakeMetadataPartialWAV(t *testing.T) {
@@ -230,5 +217,58 @@ func TestTakeChannelsFollowWAVHeader(t *testing.T) {
 	mutex.Unlock()
 	if unknown != 2 {
 		t.Errorf("device fallback = %d, want 2", unknown)
+	}
+}
+
+func TestValidatePlaybackMetadataWithoutRecognizedName(t *testing.T) {
+	mutex.Lock()
+	oldRate, oldChannels := sampleRateIdx, channelCount
+	mutex.Unlock()
+	t.Cleanup(func() {
+		mutex.Lock()
+		sampleRateIdx, channelCount = oldRate, oldChannels
+		mutex.Unlock()
+	})
+	dir := t.TempDir()
+	for _, name := range []string{"renamed.wav", "Show_20261399_120000_ch8_96kHz.wav"} {
+		path := filepath.Join(dir, name)
+		writeTestWAV(t, path, 0, true) // valid mono 48 kHz header, regardless of name
+		if row := buildRecordingRow(path); row.Channels != 0 || row.SampleRate != 0 || row.Format != "" {
+			t.Errorf("row naming policy changed: %+v", row)
+		}
+		for _, tc := range []struct {
+			rate, channels int
+			notice         string
+		}{
+			{1, 1, ""},
+			{0, 1, "SAMPLE RATE MISMATCH"},
+			{1, 2, "CHANNEL COUNT MISMATCH"},
+			{0, 2, "RATE + CHANNEL MISMATCH"},
+		} {
+			mutex.Lock()
+			sampleRateIdx, channelCount = tc.rate, tc.channels
+			err := validatePlaybackFile(path)
+			mutex.Unlock()
+			if tc.notice == "" {
+				if err != nil {
+					t.Errorf("%s: matching header refused: %v", name, err)
+				}
+			} else if m, ok := err.(*playbackMismatch); !ok || m.panelNotice() != tc.notice {
+				t.Errorf("%s at device rate index %d/%dch: got %v, want %s", name, tc.rate, tc.channels, err, tc.notice)
+			}
+		}
+	}
+	// Neither a readable format nor a filename format provides evidence to refuse.
+	unknown := filepath.Join(dir, "unknown.wav")
+	for _, data := range [][]byte{nil, []byte("RIFF")} {
+		if err := os.WriteFile(unknown, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		mutex.Lock()
+		err := validatePlaybackFile(unknown)
+		mutex.Unlock()
+		if err != nil {
+			t.Errorf("unknown format refused: %v", err)
+		}
 	}
 }

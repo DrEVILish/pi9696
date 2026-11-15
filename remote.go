@@ -2886,7 +2886,7 @@ func buildRecordingRow(path string) recordingRow {
 	}
 
 	meta := readTakeMetadata(path)
-	// Preserve the legacy presentation/validation gate until its separate fix.
+	// Rows without a recognized filename timestamp retain their bare presentation.
 	if !meta.Filename.StartValid {
 		return row
 	}

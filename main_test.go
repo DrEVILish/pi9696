@@ -3711,8 +3711,8 @@ wait $!
 // validatePlaybackFile must refuse takes recorded at a different rate or
 // channel count than the device is set to, because ffmpeg would otherwise
 // resample/rechannel silently and the deck would sound wrong with nothing
-// telling the operator why. Unparseable names pass through: absence of
-// evidence is not evidence of a mismatch.
+// telling the operator why. Unknown formats remain permissive when neither
+// a WAV header nor a filename supplies evidence of a mismatch.
 func TestValidatePlaybackFile(t *testing.T) {
 	initTestHardware(t)
 	origSR, origCh := sampleRateIdx, channelCount
@@ -3739,12 +3739,12 @@ func TestValidatePlaybackFile(t *testing.T) {
 	if !strings.Contains(err.Error(), "8") || !strings.Contains(err.Error(), "2ch") {
 		t.Errorf("channel-mismatch error names neither side: %q", err)
 	}
-	// Suffix variants and legacy/renamed files must not trip the check.
+	// Matching suffix variants and unknown formats must not trip the check.
 	if err := validatePlaybackFile("Show_20260101_120000_ch2_48kHz-1.wav"); err != nil {
 		t.Errorf("collided-name take refused: %v", err)
 	}
 	if err := validatePlaybackFile("weirdname.wav"); err != nil {
-		t.Errorf("unparseable name refused: %v", err)
+		t.Errorf("unknown format refused: %v", err)
 	}
 	if err := validatePlaybackFile("Show_20260101_120000_ch0_48kHz.wav"); err != nil {
 		t.Errorf("zero-channel parse refused: %v", err)

@@ -3856,31 +3856,30 @@ func latestRecording() string {
 // validatePlaybackFile refuses a take whose recorded format doesn't match the
 // current device configuration. ffmpeg would otherwise resample/rechannel
 // silently and the deck would play, say, a 44.1kHz take at 48kHz sounding
-// wrong with nothing telling the operator why. Takes whose names don't parse
-// (legacy/renamed files) pass through unchanged - absence of evidence is not
-// evidence of a mismatch.
+// wrong with nothing telling the operator why. Resolved WAV/filename facts
+// apply regardless of presentation naming; an unknown format remains permissive.
 func validatePlaybackFile(file string) error {
-	row := buildRecordingRow(file)
-	if row.SampleRate <= 0 || row.Channels <= 0 {
+	meta := readTakeMetadata(file)
+	if meta.SampleRate <= 0 || meta.Channels <= 0 {
 		return nil
 	}
 	wantRate := sampleRates[sampleRateIdx]
 	m := &playbackMismatch{
-		rate: row.SampleRate != wantRate,
+		rate: meta.SampleRate != wantRate,
 		// One channel more is a take that recorded timecode as audio:
 		// its last channel plays out on TIMECODE.
-		chans: row.Channels != channelCount && row.Channels != channelCount+1,
+		chans: meta.Channels != channelCount && meta.Channels != channelCount+1,
 	}
 	switch {
 	case m.rate && m.chans:
 		m.detail = fmt.Sprintf("take is %skHz/%dch but the device is set to %skHz/%dch - match the sample rate and channel count to play it",
-			row.RateKHz(), row.Channels, rateKHz(wantRate), channelCount)
+			rateKHz(meta.SampleRate), meta.Channels, rateKHz(wantRate), channelCount)
 	case m.rate:
 		m.detail = fmt.Sprintf("take is %skHz but the device is set to %skHz - match the sample rate to play it",
-			row.RateKHz(), rateKHz(wantRate))
+			rateKHz(meta.SampleRate), rateKHz(wantRate))
 	case m.chans:
 		m.detail = fmt.Sprintf("take is %dch but the device is set to %dch - match the channel count to play it",
-			row.Channels, channelCount)
+			meta.Channels, channelCount)
 	default:
 		return nil
 	}
@@ -4241,8 +4240,7 @@ var playbackStopGrace = 2 * time.Second
 // stat'd, in which case seeks are clamped to the running position and the
 // progress readout just shows elapsed without a total.
 func playbackFileDuration(path string) time.Duration {
-	channels, sampleRate := recordingFormat(path)
-	return recordingDuration(path, channels, sampleRate)
+	return readTakeMetadata(path).Duration
 }
 
 // playbackPosition returns the current playhead as a file offset. While
