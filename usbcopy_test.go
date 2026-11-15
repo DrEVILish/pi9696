@@ -124,3 +124,63 @@ func TestCopyPinsDestinationAcrossRemoval(t *testing.T) {
 		t.Fatalf("copy lost pinned destination: %v %v", st, err)
 	}
 }
+
+func TestCopyCancelRetainsWorkerUntilExit(t *testing.T) {
+	initTestHardware(t)
+	oldMP, oldMounts, oldTransfer := USBMountPoint, procMountsPath, copyUSBFile
+	oldMounted, oldFiles, oldState := usbMounted, filesToCopy, currentState
+	oldCopy, oldDone, oldCancel := isCopying, copyDone, copyCancel
+	t.Cleanup(func() {
+		USBMountPoint, procMountsPath, copyUSBFile = oldMP, oldMounts, oldTransfer
+		mutex.Lock()
+		usbMounted, filesToCopy, currentState = oldMounted, oldFiles, oldState
+		isCopying, copyDone, copyCancel = oldCopy, oldDone, oldCancel
+		mutex.Unlock()
+	})
+	USBMountPoint = t.TempDir()
+	procMountsPath = filepath.Join(t.TempDir(), "mounts")
+	if err := os.WriteFile(procMountsPath, []byte("/dev/test "+USBMountPoint+" ext4 rw 0 0\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	copyUSBFile = func(_ string, _ *os.Root, _ string, cancelled func() bool) error {
+		close(entered)
+		<-release
+		if !cancelled() {
+			t.Error("worker lost the cancellation request")
+		}
+		return errCopyCancelled
+	}
+	mutex.Lock()
+	usbMounted, filesToCopy = true, map[string]bool{"take.wav": true}
+	startCopyOperation()
+	done := copyDone
+	mutex.Unlock()
+	<-entered
+	onEncoderHold()
+	onEncoderHold() // Repeating cancellation must be harmless.
+	mutex.Lock()
+	if !isCopying || currentState != StateCopying {
+		t.Error("canceled worker released transport before storage returned")
+	} else {
+		startCopyOperation()
+		if copyDone != done {
+			t.Error("retry replaced the unfinished worker")
+		}
+	}
+	mutex.Unlock()
+	close(release)
+	waitReaped(t, done, "canceled copy")
+	mutex.Lock()
+	if isCopying || currentState != StateIdle {
+		t.Error("canceled copy did not retire")
+	}
+	filesToCopy = map[string]bool{}
+	startCopyOperation()
+	next := copyDone
+	mutex.Unlock()
+	if next == done {
+		t.Fatal("copy did not restart after confirmed exit")
+	}
+	waitReaped(t, next, "next empty copy")
+}

@@ -1176,6 +1176,7 @@ var (
 	isRecording            = false
 	isCopying              = false
 	copyDone               chan struct{} // closed when the copy worker exits
+	copyCancel             chan struct{} // cancellation request; isCopying stays true until exit
 	recordStart            time.Time
 	recordingFile          string
 	playbackCmd            *exec.Cmd
@@ -1745,8 +1746,7 @@ func onEncoderHold() {
 	noteActivity()
 
 	if currentState == StateCopying {
-		isCopying = false
-		currentState = StateIdle
+		cancelCopyLocked()
 	} else if currentState == StatePlaying || currentState == StatePaused {
 		tcUserTransportLocked()
 		stopPlayback()
@@ -4355,6 +4355,9 @@ func loadFilesToCopy() {
 	sort.Strings(allFiles)
 }
 
+// copyUSBFile is the file transfer step; tests can hold a slow-storage operation.
+var copyUSBFile = copyFile
+
 // startCopyOperation snapshots the selection and copies it on a worker.
 // Caller must hold mutex (the sole caller is handleCopyFilesClick via
 // onEncoderClick, which does): taking it here would self-deadlock the
@@ -4372,7 +4375,8 @@ func startCopyOperation() {
 	}
 	currentState = StateCopying
 	isCopying = true
-	copyDone = make(chan struct{})
+	done, cancel := make(chan struct{}), make(chan struct{})
+	copyDone, copyCancel = done, cancel
 	copyProgress = 0
 	copyStarted = time.Now()
 	// Snapshot the selection while held: the goroutine below reads this
@@ -4385,13 +4389,21 @@ func startCopyOperation() {
 		}
 	}
 
+	cancelled := func() bool {
+		select {
+		case <-cancel:
+			return true
+		default:
+			return false
+		}
+	}
 	go func() {
 		defer root.Close()
 		if len(selectedFiles) == 0 {
 			mutex.Lock()
 			isCopying = false
 			currentState = StateIdle
-			close(copyDone)
+			close(done)
 			mutex.Unlock()
 			return
 		}
@@ -4399,12 +4411,11 @@ func startCopyOperation() {
 		failed, stopped := 0, false
 		for i, file := range selectedFiles {
 			mutex.Lock()
-			cancelled := !isCopying
 			// Never copy the take currently being written: it would
 			// back up a half-finalized WAV.
 			active := isRecording && filepath.Join(RecordPath, file) == recordingFile
 			mutex.Unlock()
-			if cancelled {
+			if cancelled() {
 				stopped = true
 				break
 			}
@@ -4420,11 +4431,7 @@ func startCopyOperation() {
 			src := filepath.Join(RecordPath, file)
 			dst := file
 
-			err := copyFile(src, root, dst, func() bool {
-				mutex.Lock()
-				defer mutex.Unlock()
-				return !isCopying
-			})
+			err := copyUSBFile(src, root, dst, cancelled)
 			if err == errCopyCancelled {
 				stopped = true
 				break
@@ -4435,7 +4442,7 @@ func startCopyOperation() {
 			} else if _, serr := os.Stat(channelsSidecar(src)); serr == nil {
 				// The take's channel names travel with it (small: no
 				// progress or cancel handling needed).
-				if err := copyFile(channelsSidecar(src), root, channelsSidecar(dst), func() bool { return false }); err != nil {
+				if err := copyUSBFile(channelsSidecar(src), root, channelsSidecar(dst), func() bool { return false }); err != nil {
 					logWarnf("Failed to copy channel names of %s: %v", file, err)
 					failed++
 				}
@@ -4461,7 +4468,7 @@ func startCopyOperation() {
 		case !stopped:
 			showSysNotice("COPY COMPLETE")
 		}
-		close(copyDone)
+		close(done)
 		mutex.Unlock()
 	}()
 }
@@ -4469,8 +4476,8 @@ func startCopyOperation() {
 // cancelCopyAndWait signals a running USB copy to stop at the next file or
 // 1MB-chunk boundary and waits (bounded) for the worker to exit, so shutdown
 // never abandons a partial dst.tmp or lets the worker's terminal state write
-// land after teardown. The hold-to-cancel UI path only clears the flag and
-// returns immediately; this is the shutdown variant that also waits.
+// land after teardown. Both callers request cancellation without releasing
+// worker ownership; shutdown also waits for the captured completion.
 func cancelCopyAndWait() {
 	mutex.Lock()
 	if !isCopying || copyDone == nil {
@@ -4478,9 +4485,20 @@ func cancelCopyAndWait() {
 		return
 	}
 	done := copyDone
-	isCopying = false
+	cancelCopyLocked()
 	mutex.Unlock()
 	waitDone(done, "copy")
+}
+
+// cancelCopyLocked is idempotent and leaves the busy flag with the worker.
+func cancelCopyLocked() {
+	if copyCancel != nil {
+		select {
+		case <-copyCancel:
+		default:
+			close(copyCancel)
+		}
+	}
 }
 
 // copyFile streams src to dst rather than reading it fully into memory:

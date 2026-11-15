@@ -4176,38 +4176,32 @@ func TestFormatBusyNow(t *testing.T) {
 }
 
 // Shutdown must cancel an active USB copy instead of abandoning a partial
-// dst.tmp: the worker sees the cleared flag at the next boundary, exits, and
+// dst.tmp: the worker sees its cancellation request at the next boundary, exits, and
 // the wait returns - all without touching the network, hardware, or server.
 func TestShutdownCancelsCopy(t *testing.T) {
 	initTestHardware(t)
-	origCopy, origDone := isCopying, copyDone
+	origCopy, origDone, origCancel := isCopying, copyDone, copyCancel
 	t.Cleanup(func() {
 		mutex.Lock()
-		isCopying, copyDone = origCopy, origDone
+		isCopying, copyDone, copyCancel = origCopy, origDone, origCancel
 		mutex.Unlock()
 	})
 	mutex.Lock()
 	isCopying = true
 	copyDone = make(chan struct{})
-	done := copyDone
+	copyCancel = make(chan struct{})
+	cancel, done := copyCancel, copyDone
 	mutex.Unlock()
 
 	// Stand in for the copy worker: exit when cancelled.
 	sawCancel := make(chan struct{})
 	go func() {
-		for {
-			mutex.Lock()
-			cancelled := !isCopying
-			mutex.Unlock()
-			if cancelled {
-				close(sawCancel)
-				mutex.Lock()
-				close(done)
-				mutex.Unlock()
-				return
-			}
-			time.Sleep(5 * time.Millisecond)
-		}
+		<-cancel
+		close(sawCancel)
+		mutex.Lock()
+		isCopying = false
+		close(done)
+		mutex.Unlock()
 	}()
 
 	start := time.Now()
