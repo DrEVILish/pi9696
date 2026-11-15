@@ -3073,7 +3073,7 @@ func writeRecordingZip(dst io.Writer, base string, files []string) (err error) {
 	// listing and its turn here is skipped, and the headers have long been
 	// sent by then, so the manifest is the only place to tell the user.
 	var manifest strings.Builder
-	var skipped []string
+	var skipped, missingCompanions []string
 	added := 0
 	fmt.Fprintf(&manifest, "%-60s %12s %8s %6s %8s %10s  %s\n", "Path", "Size(bytes)", "Channels", "Rate", "Format", "Duration", "Start")
 
@@ -3127,11 +3127,19 @@ func writeRecordingZip(dst io.Writer, base string, files []string) (err error) {
 			}
 			fmt.Fprintf(&manifest, "    ch%-3d %s%s\n", c.Number, c.Name, src)
 		}
+		sideName := strings.TrimSuffix(entry, filepath.Ext(entry)) + ".channels.json"
 		if side, err := os.ReadFile(channelsSidecar(f)); err == nil {
-			hdr := &zip.FileHeader{Name: strings.TrimSuffix(entry, filepath.Ext(entry)) + ".channels.json", Method: zip.Deflate, Modified: info.ModTime()}
-			if w, err := zw.CreateHeader(hdr); err == nil {
-				w.Write(side)
+			hdr := &zip.FileHeader{Name: sideName, Method: zip.Deflate, Modified: info.ModTime()}
+			w, err := zw.CreateHeader(hdr)
+			if err != nil {
+				return err
 			}
+			if _, err := w.Write(side); err != nil {
+				return err
+			}
+		} else if !os.IsNotExist(err) {
+			logErrorf("download-all: skipping %s: %v", sideName, err)
+			missingCompanions = append(missingCompanions, fmt.Sprintf("%s (%v)", sideName, err))
 		}
 	}
 
@@ -3141,6 +3149,12 @@ func writeRecordingZip(dst io.Writer, base string, files []string) (err error) {
 		fmt.Fprintf(&head, "INCOMPLETE: %d of %d recordings could not be read and are missing:\n", len(skipped), added+len(skipped))
 		for _, s := range skipped {
 			fmt.Fprintf(&head, "    %s\n", s)
+		}
+	}
+	if len(missingCompanions) > 0 {
+		fmt.Fprintf(&head, "INCOMPLETE: %d companion files could not be read and are missing:\n", len(missingCompanions))
+		for _, missing := range missingCompanions {
+			fmt.Fprintf(&head, "    %s\n", missing)
 		}
 	}
 	head.WriteString("\n")
