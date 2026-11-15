@@ -3049,11 +3049,6 @@ func infernoRetryDueLocked(now time.Time) bool {
 	return true
 }
 
-// monitorHandoffWait bounds how long startRecording (holding the app mutex)
-// waits for the outgoing monitor ffmpeg to exit. At 128ch/48kHz the 4 MB FIFO
-// holds ~170 ms, so the wait must stay short.
-var monitorHandoffWait = 500 * time.Millisecond
-
 // doStopInferno stops the Inferno server. Must only be called from
 // infernoWorker (see doStartInferno). Captures what it needs under lock and
 // does the bounded device close (stopInProcInferno) without it.
@@ -3187,59 +3182,14 @@ func startRecording() {
 		return
 	}
 
-	// A named FIFO only supports one real reader at a time - concurrent
-	// readers split frames between them. Wait for the outgoing monitor to
-	// exit before the recorder opens the FIFO: what Inferno writes meanwhile
-	// queues in the pipe, so the take starts contiguous. Measured before this
-	// handoff: 2400 frames to the take, the next 2400 to the dying monitor.
-	// SIGKILL, not stopMonitor's SIGTERM: a graceful ffmpeg exit takes ~300ms,
-	// longer than the FIFO holds at 128ch, and the monitor only feeds meters.
-	if monitoring {
-		outgoing := monitorDone
-		if monitorCmd != nil && monitorCmd.Process != nil {
-			if err := monitorCmd.Process.Signal(syscall.SIGKILL); err != nil && !errors.Is(err, os.ErrProcessDone) {
-				logWarnf("monitor handoff: SIGKILL failed: %v", err)
-			}
-		}
-		// Claim monitor ownership synchronously: the old ffmpeg exits
-		// asynchronously, and its reaping goroutine clears the meter
-		// slices when monitorCmd still points at it - which would wipe
-		// the fresh take's slices allocated below and leave the whole
-		// take meterless. Disowning first makes that check fail.
-		monitorCmd = nil
-		monitoring = false
-		if outgoing != nil {
-			select {
-			case <-outgoing:
-			case <-time.After(monitorHandoffWait):
-				// Typically an ffmpeg blocked on an empty FIFO, which ignores
-				// SIGTERM - nothing is flowing for the two readers to split.
-				logWarnf("monitor still running after %v; starting the take anyway", monitorHandoffWait)
-			}
-		}
-	}
-
-	recordStart = time.Now()
+	input := prepareTakeInputLocked()
+	recordStart = input.started
 	timestamp := recordStart.Format("20060102_150405")
 	sampleRate := sampleRates[sampleRateIdx]
-	// Timecode (tcengine.go): the take's first sample is stamped with the
-	// incoming timecode (or the time of day). The FIFO switch drains it
-	// with no reader attached, so its answer is exactly where the take
-	// starts; recording timecode as audio switches it to every channel.
-	recChannels := channelCount
+	recChannels := input.channels
 	var stamp *recTimecode
-	tcAudioTake = false
 	if tcRecordIdx != tcRecordOff {
-		pos, ok := fifoSetLayout(tcRecordIdx == tcRecordAudio)
-		if tcRecordIdx == tcRecordAudio {
-			if ok {
-				tcAudioTake = true
-				recChannels++
-			} else {
-				logWarnf("Timecode: the audio input did not switch to the TIMECODE channel; recording timecode as metadata only")
-			}
-		}
-		stamp = tcStampTake(pos, ok, sampleRate, time.Now())
+		stamp = tcStampTake(input.firstFrame, input.positionKnown, sampleRate, time.Now())
 	}
 	// Filename prefix comes from the WebUI text field or the OLED preset
 	// list (Round 3 design: prefix_YYYYMMDD_HHMMSS_chN_NNkHz.wav); an
