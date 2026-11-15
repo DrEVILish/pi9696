@@ -248,10 +248,10 @@ configure() {
   systemctl daemon-reload
   systemctl enable -q avahi-daemon
   if [ "$CLOCK" = statime ]; then
-    systemctl disable -q --now pi9696-clock 2>/dev/null || true
+    systemctl disable -q pi9696-clock 2>/dev/null || true
     systemctl enable -q statime
   else
-    systemctl disable -q --now statime 2>/dev/null || true
+    systemctl disable -q statime 2>/dev/null || true
     systemctl enable -q pi9696-clock
   fi
   systemctl enable -q pi9696
@@ -266,7 +266,11 @@ start() {
     say "SPI was just enabled: services start after the reboot"; return
   fi
   say "Starting services"
-  local clock_unit; clock_unit=$([ "$CLOCK" = statime ] && echo statime || echo pi9696-clock)
+  local clock_unit=statime other_unit=pi9696-clock
+  if [ "$CLOCK" = stub ]; then
+    clock_unit=pi9696-clock; other_unit=statime
+  fi
+  systemctl stop "$other_unit" 2>/dev/null || true
   systemctl restart "$clock_unit"
   systemctl restart pi9696
   sleep 3
