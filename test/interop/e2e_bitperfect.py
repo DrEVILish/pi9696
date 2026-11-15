@@ -350,8 +350,14 @@ def wait_device(name, timeout=40):
 
 
 def subscriptions_on(rx_device):
-    out = netaudio("subscription", "list")
-    return [l for l in out.splitlines() if re.search(rf"\b{re.escape(rx_device)}\b", l) and re.match(r"\s*RX ", l)]
+    out = netaudio("--json", "subscription", "list")
+    try:
+        rows, _ = json.JSONDecoder().raw_decode(out.lstrip())
+        if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+            raise ValueError("not a subscription list")
+    except ValueError:
+        fail_setup("netaudio returned an invalid subscription inventory")
+    return [row for row in rows if row.get("rx_device") == rx_device]
 
 
 def route(tx_device, rx_device, ch):
@@ -363,12 +369,12 @@ def route(tx_device, rx_device, ch):
     t = time.time()
     while time.time() - t < 30:
         lines = subscriptions_on(rx_device)
-        if len(lines) >= ch and not any("Unresolved" in l for l in lines):
+        if len(lines) >= ch and all(l.get("status", {}).get("state") == "connected" for l in lines):
             return
         time.sleep(2)
     lines = subscriptions_on(rx_device)
     log(f"  warning: {len(lines)} of {ch} subscriptions on {rx_device} after 30 s; status: "
-        + ", ".join(sorted(set(re.sub(r'.*\s', '', l) for l in lines))))
+        + ", ".join(sorted(set(l.get("status", {}).get("label", "unknown") for l in lines))))
 
 
 def unroute(rx_device, ch):
