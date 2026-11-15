@@ -398,7 +398,7 @@ def main():
     a = p.parse_args()
     os.makedirs(a.work, exist_ok=True)
     asoundrc = f"{a.work}/asoundrc"
-    open(asoundrc, "w").write(f'pcm_type.inferno {{ lib "{a.plugin}" }}\npcm.inferno {{ type inferno }}\n')
+    open(asoundrc, "w").write(f'pcm_type.inferno {{ lib "{a.plugin}" }}\npcm.inferno {{ type inferno USE_FLOWS_CLOCK "1" }}\n')
 
     pia = PiA(a.pia, a.pia_ssh or f"root@{a.pia}", a.pia_name)
     pia.login()
