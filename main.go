@@ -3971,46 +3971,70 @@ func startPlaybackFrom(file string, pos time.Duration) bool {
 		return false
 	}
 
-	// Playback switches the dashboard OLED/WebUI out of input-monitoring
-	// into output-monitoring mode: stand the FIFO input monitor down (it's
-	// no longer what the meters should be showing) and signal that the
-	// playback output is the source. This is purely a metering-mode flip -
-	// it touches only the input-monitor ffmpeg, never the ALSA playback
-	// process, so it can't degrade output responsiveness.
-	//
-	// In demo mode there is no ALSA output to show, so the input monitor
-	// stays up instead: its live demo-synth levels stand in for output
-	// levels and the deck/VU pages keep dancing through the take.
-	if monitoring && !demoMode {
-		stopMonitor()
-	}
-	autoMonitor = false
-	monitoringOutput = true
-	playbackPausedElapsed = 0
-
-	cmd, stdout, viaDante := buildPlaybackCmd(file, pos)
-	if err := cmd.Start(); err != nil {
+	if err := launchPlaybackLocked(file, pos, false, false); err != nil {
 		logErrorf("Failed to start playback: %v", err)
-		failedPlaybackPipe(stdout)
 		abortPlaybackStart()
 		return false
 	}
-	startedPlaybackPipe(stdout)
+	return true
+}
 
+// launchPlaybackLocked installs one decoder generation. The caller holds the
+// app mutex throughout, has validated the take and transport, and has stopped
+// and reaped any old decoder. This never unlocks or waits for decoder completion;
+// done remains the reaper's completion signal, independent of the TX pump.
+// afterSeek preserves legacy metering order and stale-reaper monitor policy.
+func launchPlaybackLocked(file string, pos time.Duration, paused, afterSeek bool) error {
+	if !afterSeek {
+		// Stand down input metering before a fresh start. Demo keeps its input
+		// monitor as the simulated output levels.
+		if monitoring && !demoMode {
+			stopMonitor()
+		}
+		autoMonitor = false
+		monitoringOutput = true
+		playbackPausedElapsed = 0
+	}
+
+	cmd, stdout, viaDante := buildPlaybackCmd(file, pos)
+	if err := cmd.Start(); err != nil {
+		failedPlaybackPipe(stdout)
+		return err
+	}
+	startedPlaybackPipe(stdout)
 	playbackCmd = cmd
 	playbackViaDante = viaDante
 	if viaDante {
 		go pumpPlaybackToTx(cmd, stdout, txHolder, playoutFor(file, pos))
 	}
-	playbackFile = file
-	playbackStart = time.Now().Add(-pos)
-	currentState = StatePlaying
+	if afterSeek {
+		// The old reaper may have resumed input metering during the handoff.
+		// Restore output metering only once its replacement has started.
+		if monitoring && !demoMode {
+			stopMonitor()
+		}
+		monitoringOutput = true
+	} else {
+		playbackFile = file
+	}
+
+	if paused {
+		currentState = StatePaused
+		playbackPausedElapsed = pos
+		// Only local output freezes the decoder; inferno's pump emits silence.
+		if !viaDante {
+			cmd.Process.Signal(syscall.SIGSTOP)
+		}
+	} else {
+		playbackStart = time.Now().Add(-pos)
+		playbackPausedElapsed = 0
+		currentState = StatePlaying
+	}
 	done := make(chan struct{})
 	playbackDone = done
 	armDemoPlaybackEnd(cmd, playbackDuration-pos)
-
-	go reapPlayback(cmd, file, done, true)
-	return true
+	go reapPlayback(cmd, file, done, !afterSeek)
+	return nil
 }
 
 // reapPlayback owns the decoder's sole Wait and closes done after state cleanup,
@@ -4336,12 +4360,10 @@ func restartPlaybackAt(pos time.Duration) {
 		return
 	}
 
-	cmd, stdout, viaDante := buildPlaybackCmd(playbackFile, pos)
-	if err := cmd.Start(); err != nil {
+	if err := launchPlaybackLocked(playbackFile, pos, wasPaused, true); err != nil {
 		// The old process is confirmed dead here, so drive to idle cleanly
 		// instead of leaving a stale cmd behind.
 		logErrorf("Failed to seek playback: %v", err)
-		failedPlaybackPipe(stdout)
 		playbackCmd = nil
 		monitoringOutput = false
 		playbackPausedElapsed = 0
@@ -4349,42 +4371,7 @@ func restartPlaybackAt(pos time.Duration) {
 			currentState = StateIdle
 		}
 		maybeResumeInputMonitorLocked()
-		return
 	}
-
-	startedPlaybackPipe(stdout)
-	playbackCmd = cmd
-	playbackViaDante = viaDante
-	if viaDante {
-		go pumpPlaybackToTx(cmd, stdout, txHolder, playoutFor(playbackFile, pos))
-	}
-	// The old reaper may have run during the handoff wait: it clears
-	// monitoringOutput and can stand the input monitor back up (state
-	// briefly reads Idle). Restore output-metering mode like startPlayback,
-	// and the pre-seek play/pause state explicitly.
-	if monitoring && !demoMode {
-		stopMonitor()
-	}
-	monitoringOutput = true
-	if wasPaused {
-		currentState = StatePaused
-		playbackPausedElapsed = pos
-		// Local path freezes the decoder with SIGSTOP; inferno needs none
-		// (the pump writes silence while paused).
-		if !viaDante {
-			cmd.Process.Signal(syscall.SIGSTOP)
-		}
-	} else {
-		currentState = StatePlaying
-		playbackStart = time.Now().Add(-pos)
-		playbackPausedElapsed = 0
-	}
-
-	done := make(chan struct{})
-	playbackDone = done
-	armDemoPlaybackEnd(cmd, playbackDuration-pos)
-	file := playbackFile
-	go reapPlayback(cmd, file, done, false)
 }
 
 func loadFilesToCopy() {

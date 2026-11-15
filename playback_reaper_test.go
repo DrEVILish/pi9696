@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -109,5 +110,94 @@ func TestPlaybackReaperEntryPaths(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// The real start/seek entry paths must connect decoder output to the pump,
+// retaining the requested offsets and letting its final output reach EOF.
+func TestPlaybackStartAndSeekLaunchTx(t *testing.T) {
+	initTestHardware(t)
+	saveTxGlobals(t)
+	resetTransportCleanup(t)
+	setTimecodeSettings(t, tcSourceOff, tcRecordMeta, false)
+	fakeExecutable(t, "ffmpeg", "#!/bin/sh\nprintf '\\001\\000\\000\\000\\002\\000\\000\\000'\nkill -STOP $$\nexit 0\n")
+	file := filepath.Join(t.TempDir(), "recording_20260101_000000_ch2_48kHz.wav")
+	if err := os.WriteFile(file, []byte("fake"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	holder := &fakeTxHolder{}
+	mutex.Lock()
+	origInferno := infernoState
+	infernoState, demoMode = InfernoStopped, false
+	currentState, isRecording = StateIdle, false
+	sampleRateIdx, channelCount = 1, 2
+	txHolder, txHolderReady, txHolderChannels = holder, true, 3
+	mutex.Unlock()
+	t.Cleanup(func() {
+		mutex.Lock()
+		cmd, done := playbackCmd, playbackDone
+		mutex.Unlock()
+		if cmd != nil && cmd.Process != nil {
+			_ = cmd.Process.Kill()
+			waitReaped(t, done, "TX playback cleanup")
+		}
+		waitFor(t, 3*time.Second, "TX pumps to retire", func() bool { return txPumpsActive.Load() == 0 })
+		mutex.Lock()
+		infernoState = origInferno
+		mutex.Unlock()
+	})
+
+	mutex.Lock()
+	started := startPlaybackFrom(file, 2*time.Second)
+	cmd, done := playbackCmd, playbackDone
+	mutex.Unlock()
+	if !started {
+		t.Fatal("TX playback did not start")
+	}
+
+	for i, pos := range []time.Duration{2 * time.Second, 5 * time.Second} {
+		if i > 0 {
+			mutex.Lock()
+			restartPlaybackAt(pos)
+			cmd, done = playbackCmd, playbackDone
+			mutex.Unlock()
+			if cmd == nil {
+				t.Fatal("TX seek did not start")
+			}
+		}
+		waitProcessStopped(t, cmd.Process.Pid)
+		waitFor(t, 3*time.Second, "decoded audio at TX", func() bool {
+			count := 0
+			for _, sample := range holder.flattened() {
+				if sample != 0 {
+					count++
+				}
+			}
+			return count >= (i+1)*2
+		})
+		mutex.Lock()
+		state, via, loaded, elapsed := currentState, playbackViaDante, playbackFile, playbackPosition()
+		mutex.Unlock()
+		if state != StatePlaying || !via || loaded != file || elapsed < pos || elapsed > pos+time.Second {
+			t.Fatalf("playback publication: state=%v via=%v file=%q position=%v", state, via, loaded, elapsed)
+		}
+		want := "-ss " + []string{"2.000", "5.000"}[i]
+		if !strings.Contains(strings.Join(cmd.Args, " "), want) {
+			t.Fatalf("decoder args %v omit %q", cmd.Args, want)
+		}
+	}
+	if err := cmd.Process.Signal(syscall.SIGCONT); err != nil {
+		t.Fatal(err)
+	}
+	waitReaped(t, done, "TX natural EOF")
+	waitFor(t, 3*time.Second, "TX EOF drain", func() bool { return txPumpsActive.Load() == 0 })
+	var audio []int32
+	for _, sample := range holder.flattened() {
+		if sample != 0 {
+			audio = append(audio, sample)
+		}
+	}
+	if !equalInt32(audio, []int32{1, 2, 1, 2}) {
+		t.Fatalf("TX audio %v, want both decoded frames", audio)
 	}
 }
