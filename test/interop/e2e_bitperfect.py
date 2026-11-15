@@ -353,7 +353,7 @@ def subscriptions_on(rx_device):
     out = netaudio("--json", "subscription", "list")
     try:
         rows, _ = json.JSONDecoder().raw_decode(out.lstrip())
-        if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+        if not isinstance(rows, list) or not all(isinstance(row, dict) and isinstance(row.get("rx_device"), str) and row["rx_device"] for row in rows):
             raise ValueError("not a subscription list")
     except ValueError:
         fail_setup("netaudio returned an invalid subscription inventory")

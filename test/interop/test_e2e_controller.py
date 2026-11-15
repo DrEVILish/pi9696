@@ -15,7 +15,7 @@ class ControllerRows(unittest.TestCase):
             self.assertEqual(e2e.subscriptions_on("SINK"), rows[3:])
 
     def test_invalid_inventory_cannot_mean_no_existing_routes(self):
-        for output in ("controller unavailable", "{}"):
+        for output in ("controller unavailable", "{}", "[{}]", '[{"rx_device": 17}]'):
             with self.subTest(output=output), patch.object(e2e, "netaudio", return_value=output):
                 with self.assertRaises(SystemExit) as result:
                     e2e.subscriptions_on("RECORDER")

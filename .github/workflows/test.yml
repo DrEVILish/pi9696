@@ -15,7 +15,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: System packages
-        run: sudo apt-get update -q && sudo apt-get install -yq libasound2-dev ffmpeg
+        run: sudo apt-get update -q && sudo apt-get install -yq libasound2-dev ffmpeg python3-numpy
       - name: Web assets
         # The pinned list in install.sh is the one source of URLs and
         # checksums; go:embed needs the files to build.
@@ -28,3 +28,5 @@ jobs:
           done
       - name: vet + race suite
         run: test/gotest.sh
+      - name: Interop controller unit checks
+        run: /usr/bin/python3 -m unittest discover -s test/interop -p test_e2e_controller.py
