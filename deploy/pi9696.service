@@ -26,7 +26,6 @@ Group=root
 WorkingDirectory=__PI9696_DIR__
 ExecStart=__PI9696_DIR__/pi9696
 # Straightforward restart path after rebuilding: `systemctl restart pi9696`.
-ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=5
 # Give a graceful stop window so an in-flight recording segment can be
