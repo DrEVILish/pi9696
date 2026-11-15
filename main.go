@@ -820,19 +820,13 @@ var stopRequested sync.Map // *exec.Cmd -> struct{}
 func markStopRequested(cmd *exec.Cmd) {
 	if cmd != nil {
 		stopRequested.Store(cmd, struct{}{})
-		pumpHalt.Store(cmd, struct{}{})
 	}
 }
 
-// pumpHalt marks a playback the operator (or a seek) ended, for its TX pump.
-// Separate from stopRequested, which the reaper consumes: the pump must
-// still know after the reap whether to drain the rest of the decoder's
-// output (the take ended on its own) or drop it (Stop). The pump clears
-// its own mark when it exits.
-var pumpHalt sync.Map // *exec.Cmd -> struct{}
-
+// The playback reaper consumes the stop mark only after joining its pump,
+// so cancellation needs no second map that non-pump children cannot clear.
 func pumpHalted(cmd *exec.Cmd) bool {
-	_, ok := pumpHalt.Load(cmd)
+	_, ok := stopRequested.Load(cmd)
 	return ok
 }
 
