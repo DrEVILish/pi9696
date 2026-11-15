@@ -396,3 +396,67 @@ func TestRepeatedStopWhileReaperWaitsForLock(t *testing.T) {
 		t.Fatal("repeated Stop left its retired command marked")
 	}
 }
+
+func TestFailedPausedDecoderRetiresPump(t *testing.T) {
+	initTestHardware(t)
+	saveTxGlobals(t)
+	resetTransportCleanup(t)
+	setTimecodeSettings(t, tcSourceOff, tcRecordOff, false)
+	fakeExecutable(t, "ffmpeg", "#!/bin/sh\nkill -STOP $$\nexit 1\n")
+	file := filepath.Join(t.TempDir(), "Show_20260101_120000_ch2_48kHz.wav")
+	if err := os.WriteFile(file, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	h := &gatedPlaybackHolder{fakeTxHolder: fakeTxHolder{maxCalls: 64}, entered: make(chan struct{}), release: make(chan struct{})}
+	var release sync.Once
+	mutex.Lock()
+	oldInferno := infernoState
+	infernoState, demoMode = InfernoStopped, false
+	txHolder, txHolderReady, txHolderChannels = h, true, 3
+	sampleRateIdx, channelCount = 1, 2
+	playbackFile = file
+	err := launchPlaybackLocked(file, 0, true, true)
+	cmd, done := playbackCmd, playbackDone
+	mutex.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		mutex.Lock()
+		if playbackCmd == cmd {
+			stopPlayback()
+		}
+		mutex.Unlock()
+		release.Do(func() { close(h.release) })
+		_ = cmd.Process.Kill()
+		waitReaped(t, done, "failed paused playback cleanup")
+		mutex.Lock()
+		infernoState = oldInferno
+		mutex.Unlock()
+	})
+	waitProcessStopped(t, cmd.Process.Pid)
+	select {
+	case <-h.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("no paused output")
+	}
+	if err := cmd.Process.Signal(syscall.SIGCONT); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, 3*time.Second, "failed decoder reaped", func() bool { _, err := os.Stat(fmt.Sprintf("/proc/%d", cmd.Process.Pid)); return os.IsNotExist(err) })
+	release.Do(func() { close(h.release) })
+	waitReaped(t, done, "failed paused decoder")
+	h.mu.Lock()
+	calls := h.calls
+	h.mu.Unlock()
+	wantMax := 1 + (txSilenceFrames(48000)+txPumpFrames-1)/txPumpFrames
+	if calls > wantMax {
+		t.Errorf("failed decoder kept paused output running until the sink failed: %d writes, want at most %d", calls, wantMax)
+	}
+	mutex.Lock()
+	notice, state := sysNotice, currentState
+	mutex.Unlock()
+	if state != StateIdle || notice != "PLAYBACK FAILED - SEE LOG" {
+		t.Errorf("failed playback state=%v notice=%q", state, notice)
+	}
+}

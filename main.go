@@ -4006,6 +4006,18 @@ func launchPlaybackLocked(file string, pos time.Duration, paused, afterSeek bool
 // after becoming stale.
 func reapPlayback(cmd *exec.Cmd, file string, done chan struct{}, resumeMonitorForStale bool, pumpDone <-chan struct{}) {
 	werr := cmd.Wait()
+	if werr != nil && pumpDone != nil {
+		// A failed decoder must also end a paused pump. Report its fault
+		// before marking the output canceled, which keeps cleanup quiet.
+		mutex.Lock()
+		if !pumpHalted(cmd) {
+			if playbackCmd == cmd {
+				reportPlaybackExitLocked(file, werr)
+			}
+			markStopRequested(cmd)
+		}
+		mutex.Unlock()
+	}
 	if pumpDone != nil {
 		<-pumpDone
 	}
