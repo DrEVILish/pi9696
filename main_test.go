@@ -2404,7 +2404,7 @@ func TestRecordingFilenameMatchesRegexWithPrefix(t *testing.T) {
 	}
 	for _, c := range cases {
 		row := buildRecordingRow(c.name)
-		if row.Channels != c.wantCh || row.SampleRate != c.wantRate || row.Format != c.wantFormat {
+		if row.Channels != c.wantCh || row.SampleRate != c.wantRate*1000 || row.Format != c.wantFormat {
 			t.Errorf("buildRecordingRow(%q) got ch=%d rate=%d fmt=%s, want ch=%d rate=%d fmt=%s",
 				c.name, row.Channels, row.SampleRate, row.Format, c.wantCh, c.wantRate, c.wantFormat)
 		}

@@ -3851,18 +3851,18 @@ func validatePlaybackFile(file string) error {
 	}
 	wantRate := sampleRates[sampleRateIdx]
 	m := &playbackMismatch{
-		rate: row.SampleRate*1000 != wantRate,
+		rate: row.SampleRate != wantRate,
 		// One channel more is a take that recorded timecode as audio:
 		// its last channel plays out on TIMECODE.
 		chans: row.Channels != channelCount && row.Channels != channelCount+1,
 	}
 	switch {
 	case m.rate && m.chans:
-		m.detail = fmt.Sprintf("take is %dkHz/%dch but the device is set to %dkHz/%dch - match the sample rate and channel count to play it",
-			row.SampleRate, row.Channels, wantRate/1000, channelCount)
+		m.detail = fmt.Sprintf("take is %skHz/%dch but the device is set to %skHz/%dch - match the sample rate and channel count to play it",
+			row.RateKHz(), row.Channels, rateKHz(wantRate), channelCount)
 	case m.rate:
-		m.detail = fmt.Sprintf("take is %dkHz but the device is set to %dkHz - match the sample rate to play it",
-			row.SampleRate, wantRate/1000)
+		m.detail = fmt.Sprintf("take is %skHz but the device is set to %skHz - match the sample rate to play it",
+			row.RateKHz(), rateKHz(wantRate))
 	case m.chans:
 		m.detail = fmt.Sprintf("take is %dch but the device is set to %dch - match the channel count to play it",
 			row.Channels, channelCount)
@@ -4193,20 +4193,14 @@ func stopPlayback() {
 var playbackStopGrace = 2 * time.Second
 
 // playbackFileDuration returns the total duration of a WAV recording by
-// parsing its channel count and sample rate from the filename and deriving
+// reading its exact WAV channel count and sample rate and deriving
 // the length from the actual file size (see recordingDuration). It returns 0
 // if the name doesn't match the app's own convention or the file can't be
 // stat'd, in which case seeks are clamped to the running position and the
 // progress readout just shows elapsed without a total.
 func playbackFileDuration(path string) time.Duration {
-	name := filepath.Base(path)
-	m := recFilenameRe.FindStringSubmatch(name)
-	if m == nil {
-		return 0
-	}
-	channels, _ := strconv.Atoi(m[4])
-	sampleRate, _ := strconv.Atoi(m[5])
-	return recordingDuration(path, channels, sampleRate*1000)
+	channels, sampleRate := recordingFormat(path)
+	return recordingDuration(path, channels, sampleRate)
 }
 
 // playbackPosition returns the current playhead as a file offset. While

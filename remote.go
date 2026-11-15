@@ -2837,7 +2837,7 @@ var recordingsTmpl = template.Must(template.New("recordings").Parse(`
 <form hx-post="/api/recordings/channels" hx-target="#recordings" hx-swap="innerHTML" class="chan-form"><input type="hidden" name="file" value="{{.RelPath}}">
 {{range .ChanNames}}<label class="chan-row"><span>{{.Number}}</span><input class="input" name="name_{{.Number}}" value="{{.Name}}" maxlength="32" required>{{if .Source}}<small title="Source when the take started">&larr; {{.Source}}</small>{{end}}</label>
 {{end}}<button class="btn btn-sm" type="submit">Save names</button></form></details></td>
-<td>{{.Format}} {{.SampleRate}}kHz</td>
+<td>{{.Format}} {{.RateKHz}}kHz</td>
 <td>{{.StartStr}}</td>
 <td>{{.EndStr}}</td>
 <td>{{.DurationStr}}</td>
@@ -2884,6 +2884,58 @@ var recFilenameRe = regexp.MustCompile(`^([A-Za-z0-9 -]+)_(\d{8})_(\d{6})_ch(\d+
 // parsed when sane (ffmpeg writes LIST/INFO chunks before data, so the old
 // fixed 44-byte header guess under-counted); a bogus size (0 = killed
 // mid-take, or larger than the file) falls back to the file-size estimate.
+// recordingFormat reads the exact WAV format; old/incomplete files fall back
+// to their filename, whose integer kHz field rounds 44.1 kHz down to 44.
+func recordingFormat(path string) (channels, rate int) {
+	if m := recFilenameRe.FindStringSubmatch(filepath.Base(path)); m != nil {
+		channels, _ = strconv.Atoi(m[4])
+		rate, _ = strconv.Atoi(m[5])
+		rate *= 1000
+		if rate == 44000 {
+			rate = 44100
+		}
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	var hdr [12]byte
+	if _, err := io.ReadFull(f, hdr[:]); err != nil || string(hdr[8:]) != "WAVE" || (string(hdr[:4]) != "RIFF" && string(hdr[:4]) != "RF64") {
+		return
+	}
+	for {
+		var chunk [8]byte
+		if _, err := io.ReadFull(f, chunk[:]); err != nil {
+			return
+		}
+		size := int64(binary.LittleEndian.Uint32(chunk[4:]))
+		if string(chunk[:4]) == "fmt " {
+			var format [16]byte
+			if size < 16 {
+				return
+			}
+			if _, err := io.ReadFull(f, format[:]); err != nil {
+				return
+			}
+			ch, sr := int(binary.LittleEndian.Uint16(format[2:4])), int(binary.LittleEndian.Uint32(format[4:8]))
+			if ch > 0 && sr > 0 {
+				return ch, sr
+			}
+			return
+		}
+		if string(chunk[:4]) == "data" {
+			return
+		}
+		if _, err := f.Seek(size+size%2, io.SeekCurrent); err != nil {
+			return
+		}
+	}
+}
+
+func rateKHz(hz int) string            { return strconv.FormatFloat(float64(hz)/1000, 'f', -1, 64) }
+func (r recordingRow) RateKHz() string { return rateKHz(r.SampleRate) }
+
 func recordingDuration(path string, channels, sampleRate int) time.Duration {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -2991,8 +3043,7 @@ func buildRecordingRow(path string) recordingRow {
 	if err != nil {
 		return row
 	}
-	channels, _ := strconv.Atoi(m[4])
-	sampleRate, _ := strconv.Atoi(m[5])
+	channels, sampleRate := recordingFormat(path)
 	format := strings.ToUpper(m[7])
 
 	row.Channels = channels
@@ -3002,10 +3053,8 @@ func buildRecordingRow(path string) recordingRow {
 	row.Format = format
 	row.StartStr = start.Format("2006-01-02 15:04:05")
 
-	// sampleRate here is the kHz value parsed from the filename (m[5] is the
-	// "48" in 48kHz) and is stored for display; recordingDuration computes
-	// bytes-per-second from the actual sample rate, so convert kHz -> Hz.
-	dur := recordingDuration(path, channels, sampleRate*1000)
+	// Keep the exact Hz rate for validation and duration; format kHz only for display.
+	dur := recordingDuration(path, channels, sampleRate)
 	if dur > 0 {
 		row.DurationStr = formatDuration(dur)
 		row.EndStr = start.Add(dur).Format("2006-01-02 15:04:05")
@@ -3218,8 +3267,8 @@ func writeRecordingZip(dst io.Writer, base string, files []string) (err error) {
 		added++
 
 		row := buildRecordingRow(f)
-		fmt.Fprintf(&manifest, "%-60s %12d %8d %6d %8s %10s  %s\n",
-			entry, info.Size(), row.Channels, row.SampleRate, row.Format, row.DurationStr, row.StartStr)
+		fmt.Fprintf(&manifest, "%-60s %12d %8d %6s %8s %10s  %s\n",
+			entry, info.Size(), row.Channels, row.RateKHz(), row.Format, row.DurationStr, row.StartStr)
 		// The take's channel names: listed in the manifest, and the
 		// sidecar itself goes in the bundle next to the take.
 		chans := recordingChannels(f)
