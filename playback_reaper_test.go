@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"pi9696/hardware"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -336,5 +337,62 @@ func TestPlaybackOwnsOutputAfterDecoderExit(t *testing.T) {
 				t.Errorf("%s delivered %d nonzero samples, want %d", action, nonzero, want)
 			}
 		})
+	}
+}
+
+func TestRepeatedStopWhileReaperWaitsForLock(t *testing.T) {
+	initTestHardware(t)
+	saveTxGlobals(t)
+	resetTransportCleanup(t)
+	fakeExecutable(t, "ffmpeg", "#!/bin/sh\nkill -STOP $$\nexit 0\n")
+	file := filepath.Join(t.TempDir(), "Show_20260101_120000_ch2_48kHz.wav")
+	if err := os.WriteFile(file, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	mutex.Lock()
+	oldInferno := infernoState
+	infernoState = InfernoStopped
+	demoMode, txHolder, txHolderReady = false, nil, false
+	currentState, isRecording = StateIdle, false
+	sampleRateIdx, channelCount = 1, 2
+	started := startPlaybackFrom(file, 0)
+	cmd, done := playbackCmd, playbackDone
+	mutex.Unlock()
+	if !started {
+		t.Fatal("playback not started")
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		waitReaped(t, done, "repeated Stop cleanup")
+		takeStopRequested(cmd)
+		mutex.Lock()
+		infernoState = oldInferno
+		mutex.Unlock()
+	})
+	waitProcessStopped(t, cmd.Process.Pid)
+	mutex.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			mutex.Unlock()
+		}
+	}()
+	stopPlayback()
+	waitFor(t, 3*time.Second, "reaper waits for the app lock", func() bool {
+		buf := make([]byte, 1<<18)
+		n := runtime.Stack(buf, true)
+		for _, stack := range strings.Split(string(buf[:n]), "\n\n") {
+			if strings.Contains(stack, "pi9696.reapPlayback(") && strings.Contains(stack, "sync.(*Mutex).Lock") {
+				return true
+			}
+		}
+		return false
+	})
+	stopPlayback()
+	mutex.Unlock()
+	locked = false
+	waitReaped(t, done, "repeated Stop")
+	if pumpHalted(cmd) {
+		t.Fatal("repeated Stop left its retired command marked")
 	}
 }

@@ -3339,7 +3339,6 @@ func startRecording() {
 	// render() and every button/encoder callback for as long as that took.
 	go func() {
 		werr := cmd.Wait()
-		asked := takeStopRequested(cmd)
 		// Bound the meterReader goroutine (see the comment above): if an
 		// orphaned grandchild inherited stdout, the pipe never EOFs and the
 		// reader plus its fd would leak permanently. Closing our read side
@@ -3348,6 +3347,7 @@ func startRecording() {
 		_ = stdout.Close()
 		var closedFile string
 		mutex.Lock()
+		asked := takeStopRequested(cmd)
 		if ffmpegCmd == cmd {
 			closedFile = recordingFile
 			if !asked {
@@ -4009,8 +4009,8 @@ func reapPlayback(cmd *exec.Cmd, file string, done chan struct{}, resumeMonitorF
 	if pumpDone != nil {
 		<-pumpDone
 	}
-	asked := takeStopRequested(cmd)
 	mutex.Lock()
+	asked := takeStopRequested(cmd)
 	current := playbackCmd == cmd
 	if current {
 		if werr != nil && !asked {
